@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-story-lab
+  labels:
+    app: k8s-story-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k8s-story-lab
+  template:
+    metadata:
+      labels:
+        app: k8s-story-lab
+    spec:
+      containers:
+        - name: k8s-story-lab
+          image: elroymalayov/k8s-lab:1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"

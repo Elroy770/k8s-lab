@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@theme {
+  --color-k8s-blue: #326ce5;
+  --color-surface: #0f1729;
+  --color-surface-raised: #172033;
+  --color-surface-inset: #0a1120;
+  --color-edge: #24304a;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-surface);
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+
+/* Terminal scrollback and lesson panel share this quiet scrollbar. */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #2b3a55 transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background-color: #2b3a55;
+  border-radius: 4px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes pod-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.8) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.pod-enter {
+  animation: pod-enter 260ms ease-out;
+}
+
+@keyframes pulse-ring {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.pulsing {
+  animation: pulse-ring 1.1s ease-in-out infinite;
+}

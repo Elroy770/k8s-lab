@@ -1,0 +1,5 @@
+node_modules/
+.next/
+.verify/
+next-env.d.ts
+*.tsbuildinfo
