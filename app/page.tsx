@@ -6,6 +6,8 @@ import { loadLessons } from "@/engine/lesson-loader";
  * filesystem, then hand them to the client. The UI below this point knows
  * nothing about any specific lesson.
  */
+export const dynamic = "force-dynamic";
+
 export default async function Page() {
   const lessons = await loadLessons();
 

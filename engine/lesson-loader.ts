@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { parse } from "yaml";
+import YAML from "yaml";
 import { Lesson } from "./cluster-state";
 
 // Fallback embedded lessons to guarantee the application works in any runtime environment
@@ -284,7 +284,7 @@ export async function loadLessons(): Promise<Lesson[]> {
           const loaded: Lesson[] = [];
           for (const file of files) {
             const raw = fs.readFileSync(path.join(dir, file), "utf-8");
-            const data = parse(raw) as Lesson;
+            const data = (typeof YAML?.parse === "function" ? YAML.parse(raw) : (YAML as any)(raw)) as Lesson;
             if (data && data.title && data.steps) {
               loaded.push(data);
             }
