@@ -1,0 +1,47 @@
+id: 10-statefulset
+title: "StatefulSets"
+intro: |
+  Deployments are for stateless apps. Pods are identical and interchangeable.
+  For stateful apps (like databases), we need StatefulSets.
+  StatefulSets provide:
+  - Ordered deployment (0, 1, 2...)
+  - Stable network identities (mysql-0, mysql-1)
+  - Persistent storage matching
+
+initialState:
+  statefulSets:
+    - name: mysql-db
+  pods:
+    - name: mysql-db-0
+      status: Running
+    - name: mysql-db-1
+      status: Running
+    - name: mysql-db-2
+      status: Running
+
+steps:
+  - type: explanation
+    text: "Unlike Deployment pods which get random hashes (my-app-7d9g5), StatefulSet pods get sticky, predictable names."
+    behindTheScenes: "The StatefulSet controller creates pods with strict ordinal indexes (0, 1, 2...)."
+
+  - type: challenge
+    prompt: "List the statefulsets."
+    hint: "kubectl get statefulset"
+    expected:
+      verb: get
+      resource: statefulset
+    behindTheScenes: "API Server retrieves the StatefulSet object."
+
+  - type: challenge
+    prompt: "List the pods and observe their ordered names (mysql-db-0, mysql-db-1, mysql-db-2)."
+    hint: "kubectl get pods"
+    expected:
+      verb: get
+      resource: pod
+    behindTheScenes: |
+      During creation, the StatefulSet controller waited for mysql-db-0 to be Ready before creating mysql-db-1.
+      If deleted, they terminate in reverse order (2, 1, 0).
+      
+  - type: explanation
+    text: "StatefulSets also ensure each pod gets its own dedicated PersistentVolume. If a pod is rescheduled, it reconnects to its exact same volume!"
+    behindTheScenes: "The controller creates PersistentVolumeClaims dynamically from a volumeClaimTemplate, linking mysql-db-0 permanently to its specific PVC."

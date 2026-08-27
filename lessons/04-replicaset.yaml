@@ -1,0 +1,60 @@
+id: 04-replicaset
+title: "ReplicaSets"
+intro: |
+  A ReplicaSet ensures that a specified number of pod replicas are running at any given time.
+  It provides self-healing! If a pod dies, the ReplicaSet starts a new one.
+  It uses "label selectors" to know which pods it manages.
+
+initialState:
+  replicaSets:
+    - name: frontend
+      replicas: 3
+      selector:
+        app: frontend
+  pods:
+    - name: frontend-a
+      labels:
+        app: frontend
+      owner: frontend
+    - name: frontend-b
+      labels:
+        app: frontend
+      owner: frontend
+    - name: frontend-c
+      labels:
+        app: frontend
+      owner: frontend
+
+steps:
+  - type: observation
+    text: "We have a ReplicaSet named 'frontend' configured to maintain 3 replicas."
+    behindTheScenes: "The ReplicaSet controller inside kube-controller-manager is actively running a reconciliation loop: 'I desire 3 pods with label app=frontend. I see 3 pods. All is well.'"
+
+  - type: challenge
+    prompt: "List the pods to see the 3 replicas."
+    hint: "kubectl get pods"
+    expected:
+      verb: get
+      resource: pod
+    behindTheScenes: "API Server reads pod state from etcd."
+
+  - type: challenge
+    prompt: "Delete one of the pods, e.g., frontend-a."
+    hint: "kubectl delete pod frontend-a"
+    expected:
+      verb: delete
+      resource: pod
+    behindTheScenes: |
+      API Server marks pod for deletion. kubelet terminates it.
+      CRITICAL STEP: The ReplicaSet controller notices the change via its watch on the API server.
+      Actual (2) != Desired (3). 
+      ReplicaSet controller sends a request to the API Server to create a new pod.
+      Scheduler assigns it a node, kubelet starts it.
+
+  - type: challenge
+    prompt: "List the pods again to see the self-healing in action. A new pod will have replaced the deleted one."
+    hint: "kubectl get pods"
+    expected:
+      verb: get
+      resource: pod
+    behindTheScenes: "API server returns the current list of pods, which now includes a freshly scheduled pod to replace the dead one."

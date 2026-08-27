@@ -1,0 +1,55 @@
+id: 06-deployment
+title: "Deployments"
+intro: |
+  While ReplicaSets provide self-healing and scaling, they lack application update capabilities (like rolling updates or rollbacks).
+  This is why we use Deployments. A Deployment manages ReplicaSets, and ReplicaSets manage Pods.
+
+initialState:
+  deployments:
+    - name: my-app
+      replicas: 3
+  replicaSets:
+    - name: my-app-12345
+      owner: my-app
+  pods:
+    - name: my-app-12345-a
+      owner: my-app-12345
+    - name: my-app-12345-b
+      owner: my-app-12345
+    - name: my-app-12345-c
+      owner: my-app-12345
+
+steps:
+  - type: explanation
+    text: |
+      Compare the controllers:
+      - Direct Pods: No self-healing, No scaling, No rolling updates, No rollback
+      - ReplicaSets: Self-healing, Scaling, BUT No rolling updates, No rollback
+      - Deployments: All of the above + rolling updates + rollback + revision history
+    behindTheScenes: |
+      The Deployment controller (part of kube-controller-manager) watches Deployment objects. 
+      When a Deployment is created, the Deployment controller creates a ReplicaSet, which in turn creates Pods.
+
+  - type: challenge
+    prompt: "List the deployments in the cluster."
+    hint: "kubectl get deployment"
+    expected:
+      verb: get
+      resource: deployment
+    behindTheScenes: "API server fetches deployment records from etcd."
+
+  - type: challenge
+    prompt: "List the ReplicaSets to see the one created by the deployment."
+    hint: "kubectl get rs"
+    expected:
+      verb: get
+      resource: replicaset
+    behindTheScenes: "API server retrieves ReplicaSets. You'll notice the RS name is the deployment name plus a pod-template-hash."
+
+  - type: challenge
+    prompt: "List the pods to see them running."
+    hint: "kubectl get pods"
+    expected:
+      verb: get
+      resource: pod
+    behindTheScenes: "API server retrieves Pods. They are owned by the ReplicaSet, which is owned by the Deployment."

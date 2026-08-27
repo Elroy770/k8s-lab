@@ -1,0 +1,39 @@
+id: 09-daemonset
+title: "DaemonSets"
+intro: |
+  Sometimes you need exactly one pod running on EVERY node in the cluster.
+  This is what DaemonSets are for. Common use cases include:
+  - Log collection daemons (fluentd)
+  - Monitoring daemons (Prometheus Node Exporter)
+  - Networking agents (kube-proxy itself is often a DaemonSet!)
+
+initialState:
+  daemonSets:
+    - name: logging
+  pods:
+    - name: logging-node1
+      node: node1
+    - name: logging-node2
+      node: node2
+
+steps:
+  - type: challenge
+    prompt: "List the DaemonSets in the cluster."
+    hint: "kubectl get ds"
+    expected:
+      verb: get
+      resource: daemonset
+    behindTheScenes: "API Server fetches DaemonSet records from etcd."
+
+  - type: explanation
+    text: |
+      Unlike Deployments, there is no "replicas" field in a DaemonSet. The number of pods equals the number of eligible nodes.
+    behindTheScenes: |
+      The DaemonSet controller (part of kube-controller-manager) watches Nodes.
+      When a new node joins the cluster, it automatically creates a Pod for that node.
+      When a node is removed, the Pod is garbage collected.
+      The kube-scheduler is technically bypassed for DaemonSets; the DaemonSet controller explicitly sets the `nodeName` field on the pod.
+
+  - type: observation
+    text: "Notice we have a 'logging' DaemonSet running, with pods deployed on every node to collect logs."
+    behindTheScenes: "Each kubelet ensures its local logging pod remains running."

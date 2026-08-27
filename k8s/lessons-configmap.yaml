@@ -1,0 +1,505 @@
+apiVersion: v1
+data:
+  01-kubernetes-architecture.yaml: "id: 01-kubernetes-architecture\ntitle: \"Kubernetes
+    Architecture\"\nintro: |\n  Welcome to Kubernetes!\n  Before we dive into commands,
+    we need to understand the big picture. \n  Kubernetes is an orchestration platform
+    that abstracts away hardware and manages containerized applications.\n  It is
+    divided into two main parts: the Control Plane and the Data Plane (Nodes).\n\nsteps:\n
+    \ - type: explanation\n    text: |\n      **The Control Plane** is the brain of
+    the cluster.\n      It makes global decisions about the cluster (e.g. scheduling),
+    and detects and responds to cluster events.\n    behindTheScenes: |\n      The
+    Control Plane includes:\n      - API Server: The front-end of the cluster. All
+    communication goes through here.\n      - etcd: A consistent and highly-available
+    key value store used as Kubernetes' backing store for all cluster data.\n      -
+    kube-scheduler: Watches for newly created Pods with no assigned node, and selects
+    a node for them to run on.\n      - kube-controller-manager: Runs controller processes
+    (like Node controller, Job controller, Endpoints controller, etc.).\n\n  - type:
+    explanation\n    text: |\n      **The Data Plane** (or Worker Nodes) is where
+    your applications actually run.\n    behindTheScenes: |\n      Each Node runs:\n
+    \     - kubelet: An agent that makes sure that containers are running in a Pod.\n
+    \     - kube-proxy: Maintains network rules on nodes. These rules allow network
+    communication to your Pods.\n      - CRI (Container Runtime Interface): The software
+    that is responsible for running containers (like containerd or CRI-O).\n      \n
+    \ - type: transition\n    text: \"Now that you understand the basic architecture,
+    let's create our first resource in the next lesson!\"\n    behindTheScenes: \"The
+    API Server is ready and waiting for your first command.\"\n"
+  02-first-pod.yaml: "id: 02-first-pod\ntitle: \"Your First Pod\"\nintro: |\n  The
+    smallest and simplest Kubernetes object is a Pod. \n  A Pod represents a single
+    instance of a running process in your cluster. It contains one or more containers.\n
+    \ Let's create one!\n\nsteps:\n  - type: challenge\n    prompt: \"Create a pod
+    named 'web' using the 'nginx' image.\"\n    hint: \"kubectl run web --image=nginx\"\n
+    \   expected:\n      verb: run\n      resource: pod\n      name: web\n    behindTheScenes:
+    |\n      User sends POST request to API Server.\n      API Server validates the
+    request and writes it to etcd.\n      kube-scheduler notices a new pod with no
+    node assigned. It finds a suitable node and updates the API Server.\n      kubelet
+    on the chosen node notices it has been assigned a new pod. It instructs the CRI
+    (container runtime) to pull the 'nginx' image and start the container.\n      \n
+    \ - type: challenge\n    prompt: \"List the pods to see your new 'web' pod running.\"\n
+    \   hint: \"kubectl get pods\"\n    expected:\n      verb: get\n      resource:
+    pod\n    behindTheScenes: |\n      User requests pod list from API Server.\n      API
+    Server reads current state from etcd and returns it.\n\n  - type: challenge\n
+    \   prompt: \"Inspect the details of your pod to see its status, events, and node
+    assignment.\"\n    hint: \"kubectl describe pod web\"\n    expected:\n      verb:
+    describe\n      resource: pod\n      name: web\n    behindTheScenes: |\n      API
+    Server fetches detailed pod spec, status, and related events from etcd to provide
+    a comprehensive view.\n"
+  03-pod-lifecycle.yaml: "id: 03-pod-lifecycle\ntitle: \"Pod Lifecycle\"\nintro: |\n
+    \ Pods are designed to be ephemeral (temporary). \n  If a Pod fails or gets deleted,
+    Kubernetes does not automatically bring it back unless it is managed by a higher-level
+    controller.\n  Let's observe what happens when a standalone pod is deleted.\n\ninitialState:\n
+    \ pods:\n    - name: web\n      image: nginx\n      status: Running\n\nsteps:\n
+    \ - type: observation\n    text: \"Notice that we already have a pod named 'web'
+    running.\"\n    behindTheScenes: \"etcd currently has a record for the 'web' pod,
+    and kubelet is running it.\"\n\n  - type: challenge\n    prompt: \"Delete the
+    'web' pod.\"\n    hint: \"kubectl delete pod web\"\n    expected:\n      verb:
+    delete\n      resource: pod\n      name: web\n    behindTheScenes: |\n      API
+    Server receives the delete request and marks the pod for deletion in etcd (sets
+    a deletion timestamp).\n      kubelet notices the deletion timestamp, sends a
+    SIGTERM to the container via CRI.\n      Once the container stops, kubelet notifies
+    the API Server, which then fully removes the record from etcd.\n\n  - type: challenge\n
+    \   prompt: \"List the pods to verify it's gone.\"\n    hint: \"kubectl get pods\"\n
+    \   expected:\n      verb: get\n      resource: pod\n    behindTheScenes: |\n
+    \     API Server checks etcd, finds no pods, and returns an empty list.\n\n  -
+    type: explanation\n    text: |\n      The pod is gone forever! Standalone pods
+    have no self-healing capabilities.\n      To ensure our applications stay running
+    even if pods crash or are deleted, we need to use a Controller, like a ReplicaSet
+    or Deployment.\n    behindTheScenes: |\n      Because there was no controller
+    manager (like ReplicaSet controller) watching this pod, no component tried to
+    recreate it.\n"
+  04-replicaset.yaml: "id: 04-replicaset\ntitle: \"ReplicaSets\"\nintro: |\n  A ReplicaSet
+    ensures that a specified number of pod replicas are running at any given time.\n
+    \ It provides self-healing! If a pod dies, the ReplicaSet starts a new one.\n
+    \ It uses \"label selectors\" to know which pods it manages.\n\ninitialState:\n
+    \ replicaSets:\n    - name: frontend\n      replicas: 3\n      selector:\n        app:
+    frontend\n  pods:\n    - name: frontend-a\n      labels:\n        app: frontend\n
+    \     owner: frontend\n    - name: frontend-b\n      labels:\n        app: frontend\n
+    \     owner: frontend\n    - name: frontend-c\n      labels:\n        app: frontend\n
+    \     owner: frontend\n\nsteps:\n  - type: observation\n    text: \"We have a
+    ReplicaSet named 'frontend' configured to maintain 3 replicas.\"\n    behindTheScenes:
+    \"The ReplicaSet controller inside kube-controller-manager is actively running
+    a reconciliation loop: 'I desire 3 pods with label app=frontend. I see 3 pods.
+    All is well.'\"\n\n  - type: challenge\n    prompt: \"List the pods to see the
+    3 replicas.\"\n    hint: \"kubectl get pods\"\n    expected:\n      verb: get\n
+    \     resource: pod\n    behindTheScenes: \"API Server reads pod state from etcd.\"\n\n
+    \ - type: challenge\n    prompt: \"Delete one of the pods, e.g., frontend-a.\"\n
+    \   hint: \"kubectl delete pod frontend-a\"\n    expected:\n      verb: delete\n
+    \     resource: pod\n    behindTheScenes: |\n      API Server marks pod for deletion.
+    kubelet terminates it.\n      CRITICAL STEP: The ReplicaSet controller notices
+    the change via its watch on the API server.\n      Actual (2) != Desired (3).
+    \n      ReplicaSet controller sends a request to the API Server to create a new
+    pod.\n      Scheduler assigns it a node, kubelet starts it.\n\n  - type: challenge\n
+    \   prompt: \"List the pods again to see the self-healing in action. A new pod
+    will have replaced the deleted one.\"\n    hint: \"kubectl get pods\"\n    expected:\n
+    \     verb: get\n      resource: pod\n    behindTheScenes: \"API server returns
+    the current list of pods, which now includes a freshly scheduled pod to replace
+    the dead one.\"\n"
+  05-scaling.yaml: "id: 05-scaling\ntitle: \"Scaling with ReplicaSets\"\nintro: |\n
+    \ ReplicaSets make it trivial to scale your application up or down.\n  By changing
+    the \"desired\" number of replicas, the ReplicaSet controller will automatically
+    create or terminate pods to match that number.\n\ninitialState:\n  replicaSets:\n
+    \   - name: frontend\n      replicas: 3\n      selector:\n        app: frontend\n
+    \ pods:\n    - name: frontend-a\n      labels:\n        app: frontend\n    - name:
+    frontend-b\n      labels:\n        app: frontend\n    - name: frontend-c\n      labels:\n
+    \       app: frontend\n\nsteps:\n  - type: challenge\n    prompt: \"Scale the
+    'frontend' ReplicaSet up to 5 replicas.\"\n    hint: \"kubectl scale rs frontend
+    --replicas=5\"\n    expected:\n      verb: scale\n      resource: replicaset\n
+    \     name: frontend\n    behindTheScenes: |\n      User updates the ReplicaSet
+    spec in etcd via the API Server.\n      ReplicaSet controller sees desired=5,
+    actual=3. \n      It requests 2 new pods from the API Server.\n      kube-scheduler
+    assigns nodes, kubelets start the containers.\n\n  - type: challenge\n    prompt:
+    \"Check the pods to see 5 running.\"\n    hint: \"kubectl get pods\"\n    expected:\n
+    \     verb: get\n      resource: pod\n    behindTheScenes: \"API Server fetches
+    5 pod records from etcd.\"\n\n  - type: challenge\n    prompt: \"Now scale the
+    'frontend' ReplicaSet down to 2 replicas.\"\n    hint: \"kubectl scale rs frontend
+    --replicas=2\"\n    expected:\n      verb: scale\n      resource: replicaset\n
+    \     name: frontend\n    behindTheScenes: |\n      ReplicaSet controller sees
+    desired=2, actual=5.\n      It selects 3 pods and issues delete requests to the
+    API Server.\n      kubelets on respective nodes terminate the containers gracefully.\n
+    \     \n  - type: explanation\n    text: |\n      This reconciliation loop (checking
+    actual state vs desired state and making corrections) is the core pattern of Kubernetes!\n
+    \   behindTheScenes: \"The kube-controller-manager constantly runs these loops
+    for various resources, keeping the cluster in the desired state.\"\n"
+  06-deployment.yaml: "id: 06-deployment\ntitle: \"Deployments\"\nintro: |\n  While
+    ReplicaSets provide self-healing and scaling, they lack application update capabilities
+    (like rolling updates or rollbacks).\n  This is why we use Deployments. A Deployment
+    manages ReplicaSets, and ReplicaSets manage Pods.\n\ninitialState:\n  deployments:\n
+    \   - name: my-app\n      replicas: 3\n  replicaSets:\n    - name: my-app-12345\n
+    \     owner: my-app\n  pods:\n    - name: my-app-12345-a\n      owner: my-app-12345\n
+    \   - name: my-app-12345-b\n      owner: my-app-12345\n    - name: my-app-12345-c\n
+    \     owner: my-app-12345\n\nsteps:\n  - type: explanation\n    text: |\n      Compare
+    the controllers:\n      - Direct Pods: No self-healing, No scaling, No rolling
+    updates, No rollback\n      - ReplicaSets: Self-healing, Scaling, BUT No rolling
+    updates, No rollback\n      - Deployments: All of the above + rolling updates
+    + rollback + revision history\n    behindTheScenes: |\n      The Deployment controller
+    (part of kube-controller-manager) watches Deployment objects. \n      When a Deployment
+    is created, the Deployment controller creates a ReplicaSet, which in turn creates
+    Pods.\n\n  - type: challenge\n    prompt: \"List the deployments in the cluster.\"\n
+    \   hint: \"kubectl get deployment\"\n    expected:\n      verb: get\n      resource:
+    deployment\n    behindTheScenes: \"API server fetches deployment records from
+    etcd.\"\n\n  - type: challenge\n    prompt: \"List the ReplicaSets to see the
+    one created by the deployment.\"\n    hint: \"kubectl get rs\"\n    expected:\n
+    \     verb: get\n      resource: replicaset\n    behindTheScenes: \"API server
+    retrieves ReplicaSets. You'll notice the RS name is the deployment name plus a
+    pod-template-hash.\"\n\n  - type: challenge\n    prompt: \"List the pods to see
+    them running.\"\n    hint: \"kubectl get pods\"\n    expected:\n      verb: get\n
+    \     resource: pod\n    behindTheScenes: \"API server retrieves Pods. They are
+    owned by the ReplicaSet, which is owned by the Deployment.\"\n"
+  07-rolling-update.yaml: "id: 07-rolling-update\ntitle: \"Rolling Updates\"\nintro:
+    |\n  Let's update the image in our Deployment. \n  By default, Deployments use
+    a \"RollingUpdate\" strategy. \n  This means it gradually creates new pods and
+    scales down old ones, ensuring zero downtime!\n\ninitialState:\n  deployments:\n
+    \   - name: my-app\n      replicas: 3\n      image: nginx:latest\n  replicaSets:\n
+    \   - name: my-app-old\n      owner: my-app\n  pods:\n    - name: my-app-old-a\n
+    \     owner: my-app-old\n    - name: my-app-old-b\n      owner: my-app-old\n    -
+    name: my-app-old-c\n      owner: my-app-old\n\nsteps:\n  - type: challenge\n    prompt:
+    \"Update the 'my-app' deployment to use the 'nginx:1.19' image.\"\n    hint: \"kubectl
+    set image deployment/my-app nginx=nginx:1.19\"\n    expected:\n      verb: set\n
+    \     resource: deployment\n      name: my-app\n    behindTheScenes: |\n      API
+    Server updates the Deployment spec in etcd.\n      Deployment controller detects
+    the pod template changed.\n      It creates a NEW ReplicaSet for the new template,
+    while keeping the old one.\n\n  - type: observation\n    text: \"The Deployment
+    controller orchestrates a rolling update based on maxSurge and maxUnavailable
+    settings.\"\n    behindTheScenes: |\n      Deployment controller scales UP the
+    new ReplicaSet by 1 (or more based on maxSurge).\n      Once the new pod is ready,
+    it scales DOWN the old ReplicaSet.\n      This repeats until the new ReplicaSet
+    reaches desired replicas (3) and the old one reaches 0.\n\n  - type: challenge\n
+    \   prompt: \"Check the rollout status of your deployment.\"\n    hint: \"kubectl
+    rollout status deployment/my-app\"\n    expected:\n      verb: rollout\n      resource:
+    deployment\n      name: my-app\n    behindTheScenes: |\n      API Server reports
+    the progress. \n      Under the hood, it's just checking if the new ReplicaSet's
+    availableReplicas match the desired replicas.\n\n  - type: explanation\n    text:
+    |\n      Contrast this with the 'Recreate' strategy, which kills all old pods
+    before starting any new ones, causing application downtime.\n    behindTheScenes:
+    \"If Recreate was used, the Deployment controller would scale the old RS to 0
+    immediately, wait for pods to terminate, then scale the new RS to 3.\"\n"
+  08-rollback.yaml: "id: 08-rollback\ntitle: \"Rollbacks\"\nintro: |\n  Oh no! The
+    new image 'nginx:1.19' has a bug. \n  Because Deployments keep the old ReplicaSets
+    (scaled to 0), we can easily rollback to a previous version!\n\ninitialState:\n
+    \ deployments:\n    - name: my-app\n      replicas: 3\n      revision: 2\n  replicaSets:\n
+    \   - name: my-app-old\n      replicas: 0\n    - name: my-app-new\n      replicas:
+    3\n  pods:\n    - name: my-app-new-a\n      owner: my-app-new\n    - name: my-app-new-b\n
+    \     owner: my-app-new\n    - name: my-app-new-c\n      owner: my-app-new\n\nsteps:\n
+    \ - type: challenge\n    prompt: \"Check the rollout history of your deployment
+    to see the revisions.\"\n    hint: \"kubectl rollout history deployment/my-app\"\n
+    \   expected:\n      verb: rollout\n      resource: deployment\n      name: my-app\n
+    \   behindTheScenes: |\n      API Server retrieves the Deployment and its associated
+    ReplicaSets.\n      Each ReplicaSet has an annotation (deployment.kubernetes.io/revision)
+    that tracks the revision number.\n\n  - type: explanation\n    text: \"Note that
+    revisions are only created when the Pod template changes (e.g., image or labels).
+    Scaling a deployment does not create a new revision.\"\n    behindTheScenes: \"The
+    Deployment controller only generates a new pod-template-hash and new ReplicaSet
+    if the template spec differs.\"\n\n  - type: challenge\n    prompt: \"Undo the
+    last rollout to revert back to the previous revision.\"\n    hint: \"kubectl rollout
+    undo deployment/my-app\"\n    expected:\n      verb: rollout\n      resource:
+    deployment\n      name: my-app\n    behindTheScenes: |\n      API Server updates
+    the Deployment's pod template to match the old ReplicaSet's template.\n      Deployment
+    controller bumps the revision number, and starts scaling UP the old ReplicaSet
+    and scaling DOWN the new one.\n\n  - type: observation\n    text: \"Your application
+    is now back to its previous stable state!\"\n    behindTheScenes: \"The old ReplicaSet
+    is now the active one (replicas: 3), and the buggy one is scaled to 0 but kept
+    for history.\"\n"
+  09-daemonset.yaml: |
+    id: 09-daemonset
+    title: "DaemonSets"
+    intro: |
+      Sometimes you need exactly one pod running on EVERY node in the cluster.
+      This is what DaemonSets are for. Common use cases include:
+      - Log collection daemons (fluentd)
+      - Monitoring daemons (Prometheus Node Exporter)
+      - Networking agents (kube-proxy itself is often a DaemonSet!)
+
+    initialState:
+      daemonSets:
+        - name: logging
+      pods:
+        - name: logging-node1
+          node: node1
+        - name: logging-node2
+          node: node2
+
+    steps:
+      - type: challenge
+        prompt: "List the DaemonSets in the cluster."
+        hint: "kubectl get ds"
+        expected:
+          verb: get
+          resource: daemonset
+        behindTheScenes: "API Server fetches DaemonSet records from etcd."
+
+      - type: explanation
+        text: |
+          Unlike Deployments, there is no "replicas" field in a DaemonSet. The number of pods equals the number of eligible nodes.
+        behindTheScenes: |
+          The DaemonSet controller (part of kube-controller-manager) watches Nodes.
+          When a new node joins the cluster, it automatically creates a Pod for that node.
+          When a node is removed, the Pod is garbage collected.
+          The kube-scheduler is technically bypassed for DaemonSets; the DaemonSet controller explicitly sets the `nodeName` field on the pod.
+
+      - type: observation
+        text: "Notice we have a 'logging' DaemonSet running, with pods deployed on every node to collect logs."
+        behindTheScenes: "Each kubelet ensures its local logging pod remains running."
+  10-statefulset.yaml: "id: 10-statefulset\ntitle: \"StatefulSets\"\nintro: |\n  Deployments
+    are for stateless apps. Pods are identical and interchangeable.\n  For stateful
+    apps (like databases), we need StatefulSets.\n  StatefulSets provide:\n  - Ordered
+    deployment (0, 1, 2...)\n  - Stable network identities (mysql-0, mysql-1)\n  -
+    Persistent storage matching\n\ninitialState:\n  statefulSets:\n    - name: mysql-db\n
+    \ pods:\n    - name: mysql-db-0\n      status: Running\n    - name: mysql-db-1\n
+    \     status: Running\n    - name: mysql-db-2\n      status: Running\n\nsteps:\n
+    \ - type: explanation\n    text: \"Unlike Deployment pods which get random hashes
+    (my-app-7d9g5), StatefulSet pods get sticky, predictable names.\"\n    behindTheScenes:
+    \"The StatefulSet controller creates pods with strict ordinal indexes (0, 1, 2...).\"\n\n
+    \ - type: challenge\n    prompt: \"List the statefulsets.\"\n    hint: \"kubectl
+    get statefulset\"\n    expected:\n      verb: get\n      resource: statefulset\n
+    \   behindTheScenes: \"API Server retrieves the StatefulSet object.\"\n\n  - type:
+    challenge\n    prompt: \"List the pods and observe their ordered names (mysql-db-0,
+    mysql-db-1, mysql-db-2).\"\n    hint: \"kubectl get pods\"\n    expected:\n      verb:
+    get\n      resource: pod\n    behindTheScenes: |\n      During creation, the StatefulSet
+    controller waited for mysql-db-0 to be Ready before creating mysql-db-1.\n      If
+    deleted, they terminate in reverse order (2, 1, 0).\n      \n  - type: explanation\n
+    \   text: \"StatefulSets also ensure each pod gets its own dedicated PersistentVolume.
+    If a pod is rescheduled, it reconnects to its exact same volume!\"\n    behindTheScenes:
+    \"The controller creates PersistentVolumeClaims dynamically from a volumeClaimTemplate,
+    linking mysql-db-0 permanently to its specific PVC.\"\n"
+  11-jobs-cronjobs.yaml: "id: 11-jobs-cronjobs\ntitle: \"Jobs and CronJobs\"\nintro:
+    |\n  ReplicaSets and Deployments run processes that should never stop (like web
+    servers).\n  What if you want to run a batch task that does some work and then
+    finishes?\n  You use a Job. A CronJob is simply a Job that runs on a schedule.\n\ninitialState:\n
+    \ jobs:\n    - name: data-processor\n      status: Complete\n  pods:\n    - name:
+    data-processor-xyz\n      status: Completed\n\nsteps:\n  - type: explanation\n
+    \   text: \"A Job creates one or more Pods and ensures that a specified number
+    of them successfully terminate.\"\n    behindTheScenes: |\n      The Job controller
+    monitors Pods it creates. \n      If a Pod fails (exits with non-zero status),
+    the Job controller starts a new one based on the retry policy.\n      Once the
+    desired number of successful completions is reached, the Job is Complete.\n\n
+    \ - type: challenge\n    prompt: \"List the jobs in the cluster to see our completed
+    task.\"\n    hint: \"kubectl get jobs\"\n    expected:\n      verb: get\n      resource:
+    job\n    behindTheScenes: \"API Server fetches Job status.\"\n\n  - type: explanation\n
+    \   text: |\n      CronJobs manage Jobs using a time-based schedule (Cron format).\n
+    \     Concurrency policies dictate what happens if a new CronJob run is scheduled
+    but the previous one hasn't finished:\n      - Allow (run both)\n      - Forbid
+    (skip new run)\n      - Replace (kill old, start new)\n    behindTheScenes: |\n
+    \     The CronJob controller runs inside kube-controller-manager. \n      It checks
+    schedules every 10 seconds. When it's time, it creates a Job object, which then
+    creates Pods.\n"
+  12-namespaces.yaml: |
+    id: 12-namespaces
+    title: "Namespaces"
+    intro: |
+      Namespaces provide a mechanism for isolating groups of resources within a single cluster.
+      Think of them as virtual clusters.
+
+    initialState:
+      namespaces:
+        - name: default
+        - name: kube-system
+        - name: kube-public
+        - name: kube-node-lease
+
+    steps:
+      - type: explanation
+        text: |
+          Default namespaces include:
+          - default: The default namespace for objects with no other namespace.
+          - kube-system: For resources created by the Kubernetes system.
+          - kube-public: Readable by all users.
+          - kube-node-lease: For node lease objects (node heartbeats).
+        behindTheScenes: "The API Server segments API paths based on namespaces, e.g. /api/v1/namespaces/kube-system/pods."
+
+      - type: challenge
+        prompt: "List all namespaces."
+        hint: "kubectl get ns"
+        expected:
+          verb: get
+          resource: namespace
+        behindTheScenes: "API Server reads namespace resources from etcd."
+
+      - type: explanation
+        text: "Not all resources are namespaced. For example, Nodes, PersistentVolumes, and the Namespaces themselves are cluster-wide."
+        behindTheScenes: "The API Server distinguishes between namespaced and non-namespaced resources using the API discovery documents."
+  13-configmaps.yaml: |
+    id: 13-configmaps
+    title: "ConfigMaps"
+    intro: |
+      ConfigMaps allow you to decouple configuration artifacts from image content.
+      You can inject them into your Pods as:
+      1. Environment variables
+      2. Command-line arguments
+      3. Files in a Volume
+      4. Directly from the Kubernetes API
+
+    initialState:
+      configMaps:
+        - name: app-config
+
+    steps:
+      - type: challenge
+        prompt: "Get the ConfigMaps in the cluster."
+        hint: "kubectl get configmap"
+        expected:
+          verb: get
+          resource: configmap
+        behindTheScenes: "API Server reads ConfigMap definitions from etcd."
+
+      - type: challenge
+        prompt: "Describe the 'app-config' ConfigMap to see its contents."
+        hint: "kubectl describe configmap app-config"
+        expected:
+          verb: describe
+          resource: configmap
+          name: app-config
+        behindTheScenes: "API Server retrieves the keys and values stored in etcd for this ConfigMap."
+
+      - type: explanation
+        text: "When a Pod uses a ConfigMap as a volume, kubelet mounts it on the node and keeps it updated if the ConfigMap changes."
+        behindTheScenes: "kubelet's SyncLoop detects changes to the ConfigMap, then updates the files mounted in the Pod's filesystem."
+  14-secrets.yaml: |
+    id: 14-secrets
+    title: "Secrets"
+    intro: |
+      Secrets let you store and manage sensitive information, such as passwords, OAuth tokens, and ssh keys.
+      Storing confidential information in a Secret is safer and more flexible than putting it verbatim in a Pod definition or in a container image.
+
+    initialState:
+      secrets:
+        - name: db-credentials
+
+    steps:
+      - type: explanation
+        text: |
+          Types of Secrets include:
+          - Opaque: arbitrary user-defined data
+          - kubernetes.io/dockerconfigjson: for docker registry credentials
+          - kubernetes.io/tls: for TLS certificates
+        behindTheScenes: "The API Server validates the structure depending on the Secret type."
+
+      - type: challenge
+        prompt: "List the secrets in the cluster."
+        hint: "kubectl get secrets"
+        expected:
+          verb: get
+          resource: secret
+        behindTheScenes: "API Server fetches Secret metadata from etcd."
+
+      - type: explanation
+        text: |
+          WARNING: By default, Secrets are stored UNENCRYPTED (base64 encoded) in etcd!
+          Mitigation strategies:
+          - Enable Encryption at Rest in the API Server.
+          - Use external secret management systems (like HashiCorp Vault or AWS Secrets Manager) and inject them using CSI drivers.
+        behindTheScenes: "If EncryptionConfiguration is passed to the API Server, it will encrypt the secret payload before writing to etcd, and decrypt upon reading."
+  15-services-clusterip.yaml: |
+    id: 15-services-clusterip
+    title: "Services: ClusterIP"
+    intro: |
+      The Pod IP Problem: Pods are ephemeral. When they die and are replaced by a controller, they get new IP addresses.
+      How does a frontend app reliably connect to a backend app?
+      Services! They provide a stable virtual IP (ClusterIP) and DNS name.
+
+    initialState:
+      deployments:
+        - name: backend
+      pods:
+        - name: backend-1
+          labels: { app: backend }
+        - name: backend-2
+          labels: { app: backend }
+      services:
+        - name: backend-svc
+          type: ClusterIP
+          selector: { app: backend }
+
+    steps:
+      - type: explanation
+        text: "ClusterIP is the default Service type. It exposes the Service on a cluster-internal IP. Choosing this makes the Service only reachable from within the cluster."
+        behindTheScenes: |
+          When the Service is created, the Endpoints controller (in kube-controller-manager) finds Pods matching the selector and creates an Endpoints object containing their IPs.
+
+      - type: challenge
+        prompt: "Get the services."
+        hint: "kubectl get svc"
+        expected:
+          verb: get
+          resource: service
+        behindTheScenes: "API server fetches Service configurations."
+
+      - type: explanation
+        text: |
+          When a pod sends traffic to the ClusterIP, how does it reach the backend pod?
+          Load balancing and routing!
+        behindTheScenes: |
+          The kube-proxy process on EVERY node watches the API server for new Services and Endpoints.
+          It configures iptables (or IPVS) rules on its node.
+          When traffic hits the virtual ClusterIP, iptables rules perform Destination NAT (DNAT) to rewrite the destination IP to one of the healthy backend Pod IPs.
+  16-services-nodeport-lb.yaml: |
+    id: 16-services-nodeport-lb
+    title: "Services: NodePort and LoadBalancer"
+    intro: |
+      ClusterIP only allows internal traffic. How do we get external traffic into the cluster?
+
+    initialState:
+      services:
+        - name: frontend-nodeport
+          type: NodePort
+        - name: frontend-lb
+          type: LoadBalancer
+
+    steps:
+      - type: explanation
+        text: |
+          **NodePort:** Exposes the Service on each Node's IP at a static port (default: 30000-32767).
+          You can access the Service externally by requesting `<NodeIP>:<NodePort>`.
+        behindTheScenes: |
+          kube-proxy configures iptables rules to capture traffic hitting any node's IP on the assigned NodePort, and DNATs it to the backing Pods.
+
+      - type: explanation
+        text: |
+          **LoadBalancer:** Exposes the Service externally using a cloud provider's load balancer.
+          NodePort and ClusterIP services are automatically created.
+        behindTheScenes: |
+          The cloud-controller-manager (if running in AWS/GCP/Azure) watches for Services of type LoadBalancer.
+          It provisions the external Load Balancer via the cloud provider's API, pointing it at the NodePorts on the cluster nodes.
+
+      - type: explanation
+        text: |
+          **Headless Service:** A Service with `clusterIP: None`.
+          Used when you don't want load balancing, but want DNS to return the individual Pod IPs directly (often used with StatefulSets).
+        behindTheScenes: "CoreDNS observes the Headless Service and creates A records for the individual Pod IPs instead of a single virtual IP."
+  17-monitoring.yaml: |
+    id: 17-monitoring
+    title: "Monitoring and Logs"
+    intro: |
+      When things go wrong, you need to know how to troubleshoot!
+      The primary tools are `logs` (for application output) and `events` (for cluster state transitions).
+
+    initialState:
+      pods:
+        - name: my-app-pod
+
+    steps:
+      - type: challenge
+        prompt: "Get the logs for 'my-app-pod'."
+        hint: "kubectl logs my-app-pod"
+        expected:
+          verb: logs
+          resource: pod
+          name: my-app-pod
+        behindTheScenes: |
+          The API Server forwards the request to the kubelet on the node running the pod.
+          kubelet reads the container's stdout/stderr log files and streams them back through the API Server to the user.
+
+      - type: explanation
+        text: "If a pod has multiple containers, you must specify which container's logs you want using the `-c` flag."
+        behindTheScenes: "kubelet uses the container name to locate the specific log file."
+
+      - type: challenge
+        prompt: "Get cluster events to see what the control plane has been doing."
+        hint: "kubectl get events"
+        expected:
+          verb: get
+          resource: events
+        behindTheScenes: |
+          Events are a distinct resource type in etcd.
+          Various components (kubelet, scheduler, controllers) create Event records in the API server when important things happen (e.g., Pulling image, Assigned to node, BackOff restarting).
+kind: ConfigMap
+metadata:
+  name: lessons-config

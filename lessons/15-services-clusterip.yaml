@@ -1,0 +1,42 @@
+id: 15-services-clusterip
+title: "Services: ClusterIP"
+intro: |
+  The Pod IP Problem: Pods are ephemeral. When they die and are replaced by a controller, they get new IP addresses.
+  How does a frontend app reliably connect to a backend app?
+  Services! They provide a stable virtual IP (ClusterIP) and DNS name.
+
+initialState:
+  deployments:
+    - name: backend
+  pods:
+    - name: backend-1
+      labels: { app: backend }
+    - name: backend-2
+      labels: { app: backend }
+  services:
+    - name: backend-svc
+      type: ClusterIP
+      selector: { app: backend }
+
+steps:
+  - type: explanation
+    text: "ClusterIP is the default Service type. It exposes the Service on a cluster-internal IP. Choosing this makes the Service only reachable from within the cluster."
+    behindTheScenes: |
+      When the Service is created, the Endpoints controller (in kube-controller-manager) finds Pods matching the selector and creates an Endpoints object containing their IPs.
+
+  - type: challenge
+    prompt: "Get the services."
+    hint: "kubectl get svc"
+    expected:
+      verb: get
+      resource: service
+    behindTheScenes: "API server fetches Service configurations."
+
+  - type: explanation
+    text: |
+      When a pod sends traffic to the ClusterIP, how does it reach the backend pod?
+      Load balancing and routing!
+    behindTheScenes: |
+      The kube-proxy process on EVERY node watches the API server for new Services and Endpoints.
+      It configures iptables (or IPVS) rules on its node.
+      When traffic hits the virtual ClusterIP, iptables rules perform Destination NAT (DNAT) to rewrite the destination IP to one of the healthy backend Pod IPs.

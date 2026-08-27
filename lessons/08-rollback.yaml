@@ -1,0 +1,54 @@
+id: 08-rollback
+title: "Rollbacks"
+intro: |
+  Oh no! The new image 'nginx:1.19' has a bug. 
+  Because Deployments keep the old ReplicaSets (scaled to 0), we can easily rollback to a previous version!
+
+initialState:
+  deployments:
+    - name: my-app
+      replicas: 3
+      revision: 2
+  replicaSets:
+    - name: my-app-old
+      replicas: 0
+    - name: my-app-new
+      replicas: 3
+  pods:
+    - name: my-app-new-a
+      owner: my-app-new
+    - name: my-app-new-b
+      owner: my-app-new
+    - name: my-app-new-c
+      owner: my-app-new
+
+steps:
+  - type: challenge
+    prompt: "Check the rollout history of your deployment to see the revisions."
+    hint: "kubectl rollout history deployment/my-app"
+    expected:
+      verb: rollout
+      resource: deployment
+      name: my-app
+    behindTheScenes: |
+      API Server retrieves the Deployment and its associated ReplicaSets.
+      Each ReplicaSet has an annotation (deployment.kubernetes.io/revision) that tracks the revision number.
+
+  - type: explanation
+    text: "Note that revisions are only created when the Pod template changes (e.g., image or labels). Scaling a deployment does not create a new revision."
+    behindTheScenes: "The Deployment controller only generates a new pod-template-hash and new ReplicaSet if the template spec differs."
+
+  - type: challenge
+    prompt: "Undo the last rollout to revert back to the previous revision."
+    hint: "kubectl rollout undo deployment/my-app"
+    expected:
+      verb: rollout
+      resource: deployment
+      name: my-app
+    behindTheScenes: |
+      API Server updates the Deployment's pod template to match the old ReplicaSet's template.
+      Deployment controller bumps the revision number, and starts scaling UP the old ReplicaSet and scaling DOWN the new one.
+
+  - type: observation
+    text: "Your application is now back to its previous stable state!"
+    behindTheScenes: "The old ReplicaSet is now the active one (replicas: 3), and the buggy one is scaled to 0 but kept for history."

@@ -1,0 +1,40 @@
+id: 02-first-pod
+title: "Your First Pod"
+intro: |
+  The smallest and simplest Kubernetes object is a Pod. 
+  A Pod represents a single instance of a running process in your cluster. It contains one or more containers.
+  Let's create one!
+
+steps:
+  - type: challenge
+    prompt: "Create a pod named 'web' using the 'nginx' image."
+    hint: "kubectl run web --image=nginx"
+    expected:
+      verb: run
+      resource: pod
+      name: web
+    behindTheScenes: |
+      User sends POST request to API Server.
+      API Server validates the request and writes it to etcd.
+      kube-scheduler notices a new pod with no node assigned. It finds a suitable node and updates the API Server.
+      kubelet on the chosen node notices it has been assigned a new pod. It instructs the CRI (container runtime) to pull the 'nginx' image and start the container.
+      
+  - type: challenge
+    prompt: "List the pods to see your new 'web' pod running."
+    hint: "kubectl get pods"
+    expected:
+      verb: get
+      resource: pod
+    behindTheScenes: |
+      User requests pod list from API Server.
+      API Server reads current state from etcd and returns it.
+
+  - type: challenge
+    prompt: "Inspect the details of your pod to see its status, events, and node assignment."
+    hint: "kubectl describe pod web"
+    expected:
+      verb: describe
+      resource: pod
+      name: web
+    behindTheScenes: |
+      API Server fetches detailed pod spec, status, and related events from etcd to provide a comprehensive view.

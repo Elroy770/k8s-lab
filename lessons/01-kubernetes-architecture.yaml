@@ -1,0 +1,32 @@
+id: 01-kubernetes-architecture
+title: "Kubernetes Architecture"
+intro: |
+  Welcome to Kubernetes!
+  Before we dive into commands, we need to understand the big picture. 
+  Kubernetes is an orchestration platform that abstracts away hardware and manages containerized applications.
+  It is divided into two main parts: the Control Plane and the Data Plane (Nodes).
+
+steps:
+  - type: explanation
+    text: |
+      **The Control Plane** is the brain of the cluster.
+      It makes global decisions about the cluster (e.g. scheduling), and detects and responds to cluster events.
+    behindTheScenes: |
+      The Control Plane includes:
+      - API Server: The front-end of the cluster. All communication goes through here.
+      - etcd: A consistent and highly-available key value store used as Kubernetes' backing store for all cluster data.
+      - kube-scheduler: Watches for newly created Pods with no assigned node, and selects a node for them to run on.
+      - kube-controller-manager: Runs controller processes (like Node controller, Job controller, Endpoints controller, etc.).
+
+  - type: explanation
+    text: |
+      **The Data Plane** (or Worker Nodes) is where your applications actually run.
+    behindTheScenes: |
+      Each Node runs:
+      - kubelet: An agent that makes sure that containers are running in a Pod.
+      - kube-proxy: Maintains network rules on nodes. These rules allow network communication to your Pods.
+      - CRI (Container Runtime Interface): The software that is responsible for running containers (like containerd or CRI-O).
+      
+  - type: transition
+    text: "Now that you understand the basic architecture, let's create our first resource in the next lesson!"
+    behindTheScenes: "The API Server is ready and waiting for your first command."

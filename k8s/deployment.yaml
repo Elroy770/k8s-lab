@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: k8s-story-lab
-          image: elroymalayov/k8s-lab:1.0
+          image: elroymalayov/k8s-lab:1.2
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
@@ -28,3 +28,10 @@ spec:
             limits:
               memory: "256Mi"
               cpu: "500m"
+          volumeMounts:
+            - name: lessons-volume
+              mountPath: /app/lessons
+      volumes:
+        - name: lessons-volume
+          configMap:
+            name: lessons-config

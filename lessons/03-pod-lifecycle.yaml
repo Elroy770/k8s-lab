@@ -1,0 +1,45 @@
+id: 03-pod-lifecycle
+title: "Pod Lifecycle"
+intro: |
+  Pods are designed to be ephemeral (temporary). 
+  If a Pod fails or gets deleted, Kubernetes does not automatically bring it back unless it is managed by a higher-level controller.
+  Let's observe what happens when a standalone pod is deleted.
+
+initialState:
+  pods:
+    - name: web
+      image: nginx
+      status: Running
+
+steps:
+  - type: observation
+    text: "Notice that we already have a pod named 'web' running."
+    behindTheScenes: "etcd currently has a record for the 'web' pod, and kubelet is running it."
+
+  - type: challenge
+    prompt: "Delete the 'web' pod."
+    hint: "kubectl delete pod web"
+    expected:
+      verb: delete
+      resource: pod
+      name: web
+    behindTheScenes: |
+      API Server receives the delete request and marks the pod for deletion in etcd (sets a deletion timestamp).
+      kubelet notices the deletion timestamp, sends a SIGTERM to the container via CRI.
+      Once the container stops, kubelet notifies the API Server, which then fully removes the record from etcd.
+
+  - type: challenge
+    prompt: "List the pods to verify it's gone."
+    hint: "kubectl get pods"
+    expected:
+      verb: get
+      resource: pod
+    behindTheScenes: |
+      API Server checks etcd, finds no pods, and returns an empty list.
+
+  - type: explanation
+    text: |
+      The pod is gone forever! Standalone pods have no self-healing capabilities.
+      To ensure our applications stay running even if pods crash or are deleted, we need to use a Controller, like a ReplicaSet or Deployment.
+    behindTheScenes: |
+      Because there was no controller manager (like ReplicaSet controller) watching this pod, no component tried to recreate it.

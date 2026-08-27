@@ -1,0 +1,61 @@
+id: 05-scaling
+title: "Scaling with ReplicaSets"
+intro: |
+  ReplicaSets make it trivial to scale your application up or down.
+  By changing the "desired" number of replicas, the ReplicaSet controller will automatically create or terminate pods to match that number.
+
+initialState:
+  replicaSets:
+    - name: frontend
+      replicas: 3
+      selector:
+        app: frontend
+  pods:
+    - name: frontend-a
+      labels:
+        app: frontend
+    - name: frontend-b
+      labels:
+        app: frontend
+    - name: frontend-c
+      labels:
+        app: frontend
+
+steps:
+  - type: challenge
+    prompt: "Scale the 'frontend' ReplicaSet up to 5 replicas."
+    hint: "kubectl scale rs frontend --replicas=5"
+    expected:
+      verb: scale
+      resource: replicaset
+      name: frontend
+    behindTheScenes: |
+      User updates the ReplicaSet spec in etcd via the API Server.
+      ReplicaSet controller sees desired=5, actual=3. 
+      It requests 2 new pods from the API Server.
+      kube-scheduler assigns nodes, kubelets start the containers.
+
+  - type: challenge
+    prompt: "Check the pods to see 5 running."
+    hint: "kubectl get pods"
+    expected:
+      verb: get
+      resource: pod
+    behindTheScenes: "API Server fetches 5 pod records from etcd."
+
+  - type: challenge
+    prompt: "Now scale the 'frontend' ReplicaSet down to 2 replicas."
+    hint: "kubectl scale rs frontend --replicas=2"
+    expected:
+      verb: scale
+      resource: replicaset
+      name: frontend
+    behindTheScenes: |
+      ReplicaSet controller sees desired=2, actual=5.
+      It selects 3 pods and issues delete requests to the API Server.
+      kubelets on respective nodes terminate the containers gracefully.
+      
+  - type: explanation
+    text: |
+      This reconciliation loop (checking actual state vs desired state and making corrections) is the core pattern of Kubernetes!
+    behindTheScenes: "The kube-controller-manager constantly runs these loops for various resources, keeping the cluster in the desired state."

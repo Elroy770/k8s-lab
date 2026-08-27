@@ -1,0 +1,35 @@
+id: 17-monitoring
+title: "Monitoring and Logs"
+intro: |
+  When things go wrong, you need to know how to troubleshoot!
+  The primary tools are `logs` (for application output) and `events` (for cluster state transitions).
+
+initialState:
+  pods:
+    - name: my-app-pod
+
+steps:
+  - type: challenge
+    prompt: "Get the logs for 'my-app-pod'."
+    hint: "kubectl logs my-app-pod"
+    expected:
+      verb: logs
+      resource: pod
+      name: my-app-pod
+    behindTheScenes: |
+      The API Server forwards the request to the kubelet on the node running the pod.
+      kubelet reads the container's stdout/stderr log files and streams them back through the API Server to the user.
+
+  - type: explanation
+    text: "If a pod has multiple containers, you must specify which container's logs you want using the `-c` flag."
+    behindTheScenes: "kubelet uses the container name to locate the specific log file."
+
+  - type: challenge
+    prompt: "Get cluster events to see what the control plane has been doing."
+    hint: "kubectl get events"
+    expected:
+      verb: get
+      resource: events
+    behindTheScenes: |
+      Events are a distinct resource type in etcd.
+      Various components (kubelet, scheduler, controllers) create Event records in the API server when important things happen (e.g., Pulling image, Assigned to node, BackOff restarting).

@@ -1,0 +1,34 @@
+id: 12-namespaces
+title: "Namespaces"
+intro: |
+  Namespaces provide a mechanism for isolating groups of resources within a single cluster.
+  Think of them as virtual clusters.
+
+initialState:
+  namespaces:
+    - name: default
+    - name: kube-system
+    - name: kube-public
+    - name: kube-node-lease
+
+steps:
+  - type: explanation
+    text: |
+      Default namespaces include:
+      - default: The default namespace for objects with no other namespace.
+      - kube-system: For resources created by the Kubernetes system.
+      - kube-public: Readable by all users.
+      - kube-node-lease: For node lease objects (node heartbeats).
+    behindTheScenes: "The API Server segments API paths based on namespaces, e.g. /api/v1/namespaces/kube-system/pods."
+
+  - type: challenge
+    prompt: "List all namespaces."
+    hint: "kubectl get ns"
+    expected:
+      verb: get
+      resource: namespace
+    behindTheScenes: "API Server reads namespace resources from etcd."
+
+  - type: explanation
+    text: "Not all resources are namespaced. For example, Nodes, PersistentVolumes, and the Namespaces themselves are cluster-wide."
+    behindTheScenes: "The API Server distinguishes between namespaced and non-namespaced resources using the API discovery documents."

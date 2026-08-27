@@ -1,0 +1,33 @@
+id: 16-services-nodeport-lb
+title: "Services: NodePort and LoadBalancer"
+intro: |
+  ClusterIP only allows internal traffic. How do we get external traffic into the cluster?
+
+initialState:
+  services:
+    - name: frontend-nodeport
+      type: NodePort
+    - name: frontend-lb
+      type: LoadBalancer
+
+steps:
+  - type: explanation
+    text: |
+      **NodePort:** Exposes the Service on each Node's IP at a static port (default: 30000-32767).
+      You can access the Service externally by requesting `<NodeIP>:<NodePort>`.
+    behindTheScenes: |
+      kube-proxy configures iptables rules to capture traffic hitting any node's IP on the assigned NodePort, and DNATs it to the backing Pods.
+
+  - type: explanation
+    text: |
+      **LoadBalancer:** Exposes the Service externally using a cloud provider's load balancer.
+      NodePort and ClusterIP services are automatically created.
+    behindTheScenes: |
+      The cloud-controller-manager (if running in AWS/GCP/Azure) watches for Services of type LoadBalancer.
+      It provisions the external Load Balancer via the cloud provider's API, pointing it at the NodePorts on the cluster nodes.
+
+  - type: explanation
+    text: |
+      **Headless Service:** A Service with `clusterIP: None`.
+      Used when you don't want load balancing, but want DNS to return the individual Pod IPs directly (often used with StatefulSets).
+    behindTheScenes: "CoreDNS observes the Headless Service and creates A records for the individual Pod IPs instead of a single virtual IP."

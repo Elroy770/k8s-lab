@@ -1,0 +1,58 @@
+id: 07-rolling-update
+title: "Rolling Updates"
+intro: |
+  Let's update the image in our Deployment. 
+  By default, Deployments use a "RollingUpdate" strategy. 
+  This means it gradually creates new pods and scales down old ones, ensuring zero downtime!
+
+initialState:
+  deployments:
+    - name: my-app
+      replicas: 3
+      image: nginx:latest
+  replicaSets:
+    - name: my-app-old
+      owner: my-app
+  pods:
+    - name: my-app-old-a
+      owner: my-app-old
+    - name: my-app-old-b
+      owner: my-app-old
+    - name: my-app-old-c
+      owner: my-app-old
+
+steps:
+  - type: challenge
+    prompt: "Update the 'my-app' deployment to use the 'nginx:1.19' image."
+    hint: "kubectl set image deployment/my-app nginx=nginx:1.19"
+    expected:
+      verb: set
+      resource: deployment
+      name: my-app
+    behindTheScenes: |
+      API Server updates the Deployment spec in etcd.
+      Deployment controller detects the pod template changed.
+      It creates a NEW ReplicaSet for the new template, while keeping the old one.
+
+  - type: observation
+    text: "The Deployment controller orchestrates a rolling update based on maxSurge and maxUnavailable settings."
+    behindTheScenes: |
+      Deployment controller scales UP the new ReplicaSet by 1 (or more based on maxSurge).
+      Once the new pod is ready, it scales DOWN the old ReplicaSet.
+      This repeats until the new ReplicaSet reaches desired replicas (3) and the old one reaches 0.
+
+  - type: challenge
+    prompt: "Check the rollout status of your deployment."
+    hint: "kubectl rollout status deployment/my-app"
+    expected:
+      verb: rollout
+      resource: deployment
+      name: my-app
+    behindTheScenes: |
+      API Server reports the progress. 
+      Under the hood, it's just checking if the new ReplicaSet's availableReplicas match the desired replicas.
+
+  - type: explanation
+    text: |
+      Contrast this with the 'Recreate' strategy, which kills all old pods before starting any new ones, causing application downtime.
+    behindTheScenes: "If Recreate was used, the Deployment controller would scale the old RS to 0 immediately, wait for pods to terminate, then scale the new RS to 3."
