@@ -1,4 +1,4 @@
-import { ClusterState, Pod, ReplicaSet, Deployment, LessonStep, DaemonSet, StatefulSet, Job, CronJob, Service, Namespace, ConfigMapResource, SecretResource } from "./cluster-state";
+import { ClusterState, Pod, ReplicaSet, Deployment, LessonStep, DaemonSet, StatefulSet, Job, CronJob, Service, ServicePort, Namespace, ConfigMapResource, SecretResource } from "./cluster-state";
 import { parseCommand } from "./kubectl-parser";
 
 export interface ExecutionResult {
@@ -6,6 +6,41 @@ export interface ExecutionResult {
   newState: ClusterState;
   isCorrect: boolean;
   message?: string;
+}
+
+function formatServicePorts(ports: string | ServicePort[] | undefined): string {
+  if (!ports) return "<none>";
+  if (typeof ports === "string") return ports;
+  if (Array.isArray(ports)) {
+    return ports
+      .map((p) => `${p.port}${p.nodePort ? `:${p.nodePort}` : ""}/${p.protocol || "TCP"}`)
+      .join(",");
+  }
+  return "<none>";
+}
+
+function getServicePortInfo(ports: string | ServicePort[] | undefined): { portNum: string; targetPort: string } {
+  if (!ports) return { portNum: "80", targetPort: "80" };
+  if (Array.isArray(ports)) {
+    const first = ports[0];
+    if (first) {
+      return {
+        portNum: String(first.port),
+        targetPort: String(first.nodePort || first.port),
+      };
+    }
+    return { portNum: "80", targetPort: "80" };
+  }
+  if (typeof ports === "string") {
+    const portNum = ports.split(":")[0];
+    const targetPort = ports.includes(":")
+      ? ports.split(":")[1].includes("/")
+        ? ports.split(":")[1].split("/")[0]
+        : ports.split(":")[1]
+      : portNum;
+    return { portNum, targetPort };
+  }
+  return { portNum: "80", targetPort: "80" };
 }
 
 export function executeCommand(
@@ -178,7 +213,7 @@ export function executeCommand(
       } else {
         const header = `NAME         TYPE           CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE`;
         const rows = nextState.services.map(
-          (svc) => `${svc.name.padEnd(12)} ${svc.type.padEnd(14)} ${svc.clusterIP.padEnd(15)} ${svc.externalIP || "<none>        "} ${svc.ports.padEnd(9)} ${svc.age}`
+          (svc) => `${svc.name.padEnd(12)} ${svc.type.padEnd(14)} ${svc.clusterIP.padEnd(15)} ${svc.externalIP || "<none>        "} ${formatServicePorts(svc.ports).padEnd(9)} ${svc.age}`
         );
         output = [header, ...rows].join("\n");
       }
@@ -248,8 +283,7 @@ Events:
         output = `Error from server (NotFound): services "${name}" not found`;
       } else {
         const selectors = svc.selector ? Object.entries(svc.selector).map(([k, v]) => `${k}=${v}`).join(",") : "<none>";
-        const portNum = svc.ports.split(":")[0];
-        const targetPort = svc.ports.includes(":") ? (svc.ports.split(":")[1].includes("/") ? svc.ports.split(":")[1].split("/")[0] : svc.ports.split(":")[1]) : portNum;
+        const { portNum, targetPort } = getServicePortInfo(svc.ports);
         output = `Name:              ${svc.name}
 Namespace:         default
 Labels:            <none>

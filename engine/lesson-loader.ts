@@ -277,13 +277,14 @@ export async function loadLessons(): Promise<Lesson[]> {
 
   for (const dir of possiblePaths) {
     try {
-      if (fs.existsSync(dir)) {
-        const files = fs.readdirSync(dir).filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"));
+      if (fs.existsSync(/*turbopackIgnore: true*/ dir)) {
+        const files = fs.readdirSync(/*turbopackIgnore: true*/ dir).filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"));
         if (files.length > 0) {
           files.sort();
           const loaded: Lesson[] = [];
           for (const file of files) {
-            const raw = fs.readFileSync(path.join(dir, file), "utf-8");
+            const filePath = path.join(/*turbopackIgnore: true*/ dir, file);
+            const raw = fs.readFileSync(/*turbopackIgnore: true*/ filePath, "utf-8");
             const data = (typeof YAML?.parse === "function" ? YAML.parse(raw) : (YAML as any)(raw)) as Lesson;
             if (data && data.title && data.steps) {
               loaded.push(data);
