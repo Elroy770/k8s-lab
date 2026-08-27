@@ -11,6 +11,7 @@ export interface Pod {
   };
   restarts: number;
   age: string;
+  namespace?: string;
 }
 
 export interface ReplicaSet {
@@ -18,6 +19,7 @@ export interface ReplicaSet {
   desiredReplicas: number;
   currentReplicas: number;
   readyReplicas: number;
+  replicas?: number;
   image: string;
   labels?: Record<string, string>;
   matchLabels?: Record<string, string>;
@@ -26,11 +28,13 @@ export interface ReplicaSet {
     name: string;
   };
   age: string;
+  namespace?: string;
 }
 
 export interface Deployment {
   name: string;
   replicas: number;
+  readyReplicas?: number;
   upToDate: number;
   available: number;
   image: string;
@@ -39,6 +43,7 @@ export interface Deployment {
   revision: number;
   oldRevisions?: { revision: number; image: string; rsName: string }[];
   age: string;
+  namespace?: string;
 }
 
 export interface DaemonSet {
@@ -46,8 +51,11 @@ export interface DaemonSet {
   desiredNodes: number;
   currentPods: number;
   readyPods: number;
+  numberReady?: number;
+  desiredNumberScheduled?: number;
   image: string;
   age: string;
+  namespace?: string;
 }
 
 export interface StatefulSet {
@@ -57,6 +65,7 @@ export interface StatefulSet {
   image: string;
   serviceName: string;
   age: string;
+  namespace?: string;
 }
 
 export interface Job {
@@ -67,6 +76,7 @@ export interface Job {
   image: string;
   status: 'Running' | 'Complete' | 'Failed';
   age: string;
+  namespace?: string;
 }
 
 export interface CronJob {
@@ -75,6 +85,13 @@ export interface CronJob {
   lastSchedule: string;
   active: number;
   age: string;
+  namespace?: string;
+}
+
+export interface ServicePort {
+  port: number | string;
+  nodePort?: number | string;
+  protocol?: string;
 }
 
 export interface Service {
@@ -82,9 +99,10 @@ export interface Service {
   type: 'ClusterIP' | 'NodePort' | 'LoadBalancer' | 'Headless';
   clusterIP: string;
   externalIP?: string;
-  ports: string;
+  ports: string | ServicePort[];
   selector: Record<string, string>;
   age: string;
+  namespace?: string;
 }
 
 export interface Namespace {
@@ -97,13 +115,16 @@ export interface ConfigMapResource {
   name: string;
   data: Record<string, string>;
   age: string;
+  namespace?: string;
 }
 
 export interface SecretResource {
   name: string;
   type: string;
-  dataKeys: string[];
+  dataKeys?: string[];
+  data?: Record<string, string>;
   age: string;
+  namespace?: string;
 }
 
 export interface ClusterState {

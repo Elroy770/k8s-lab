@@ -466,7 +466,7 @@ export default function Lab({ lessons }: { lessons: Lesson[] }) {
                         <div className="text-xs text-rose-500/80 mt-1 uppercase tracking-wider">{sec.type}</div>
                       </div>
                       <div className="text-sm text-rose-200 bg-rose-900/40 px-3 py-1 rounded-md border border-rose-800/50">
-                        {Object.keys(sec.data || {}).length} keys
+                        {Object.keys(sec.data || {}).length || sec.dataKeys?.length || 0} keys
                       </div>
                     </div>
                   ))}

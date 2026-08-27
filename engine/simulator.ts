@@ -198,7 +198,7 @@ export function executeCommand(
       } else {
         const header = `NAME         DATA   AGE`;
         const rows = nextState.configMaps.map(
-          (cm) => `${cm.name.padEnd(12)} ${String(Object.keys(cm.data).length).padEnd(6)} ${cm.age}`
+          (cm) => `${cm.name.padEnd(12)} ${String(Object.keys(cm.data || {}).length).padEnd(6)} ${cm.age}`
         );
         output = [header, ...rows].join("\n");
       }
@@ -208,7 +208,7 @@ export function executeCommand(
       } else {
         const header = `NAME         TYPE                                  DATA   AGE`;
         const rows = nextState.secrets.map(
-          (sec) => `${sec.name.padEnd(12)} ${sec.type.padEnd(37)} ${String(sec.dataKeys.length).padEnd(6)} ${sec.age}`
+          (sec) => `${sec.name.padEnd(12)} ${sec.type.padEnd(37)} ${String((sec.dataKeys || []).length).padEnd(6)} ${sec.age}`
         );
         output = [header, ...rows].join("\n");
       }
