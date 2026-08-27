@@ -2,9 +2,11 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: k8s-story-lab-ingress
+  namespace: k8s-lab
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
+  ingressClassName: nginx
   rules:
     - host: k8s.elroy.site
       http:

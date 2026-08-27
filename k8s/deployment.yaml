@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: k8s-story-lab
+  namespace: k8s-lab
   labels:
     app: k8s-story-lab
 spec:

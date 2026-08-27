@@ -1,0 +1,27 @@
+id: pod-lifecycle
+title: Your Pod Died
+
+intro: |
+  Your standalone nginx Pod 'web' is currently running.
+  Let's simulate a node failure or an accidental deletion to see what happens.
+
+steps:
+  - type: challenge
+    prompt: Delete the 'web' Pod.
+    expected:
+      verb: delete
+      resource: pod
+      name: web
+
+  - type: observation
+    text: |
+      The Pod disappeared and did not come back.
+
+  - type: explanation
+    text: |
+      A standalone Pod has no controller responsible for restoring it. 
+      If it crashes or is deleted, it is gone forever. This requires manual remediation.
+
+  - type: transition
+    text: |
+      We need a controller that continuously maintains our desired state automatically.

@@ -1,0 +1,40 @@
+id: replicaset
+title: The ReplicaSet
+
+intro: |
+  A ReplicaSet is a controller designed to ensure that a specific number of identical Pod replicas are running at any given time.
+  It acts as a stability mechanism through a continuous Reconciliation Loop.
+  
+  Let's see it in action. A ReplicaSet named 'frontend' managing 3 Pods has been created for you.
+
+steps:
+  - type: challenge
+    prompt: Delete one of the Pods (e.g., 'frontend-pod-1').
+    expected:
+      verb: delete
+      resource: pod
+      # The simulator will accept deleting any pod managed by the ReplicaSet.
+
+  - type: observation
+    text: |
+      The ReplicaSet immediately detected that the actual state (2 Pods) did not match the desired state (3 Pods).
+      It automatically created a replacement Pod to restore the balance!
+
+  - type: explanation
+    text: |
+      This is self-healing in action. The ReplicaSet uses label selectors to identify which Pods it owns.
+
+  - type: challenge
+    prompt: Scale the 'frontend' ReplicaSet to 5 replicas.
+    expected:
+      verb: scale
+      resource: replicaset
+      name: frontend
+
+  - type: observation
+    text: |
+      The ReplicaSet created 2 more Pods to meet the new desired state of 5.
+
+  - type: transition
+    text: |
+      ReplicaSets are great for keeping Pods alive, but they don't help much when we need to release a new version of our application without downtime.
