@@ -3,37 +3,43 @@ title: "DaemonSets"
 intro: |
   Sometimes you need exactly one pod running on EVERY node in the cluster.
   This is what DaemonSets are for. Common use cases include:
-  - Log collection daemons (fluentd)
+  - Log collection daemons (fluentd, logstash)
   - Monitoring daemons (Prometheus Node Exporter)
-  - Networking agents (kube-proxy itself is often a DaemonSet!)
+  - Networking agents (kube-proxy, cilium, calico)
+  
+  Unlike Deployments which can place multiple replicas on any node, DaemonSets ensure that as nodes are added to the cluster, a copy of the specified pod is automatically added to them. When nodes are removed, the pods are garbage collected.
 
 initialState:
   daemonSets:
-    - name: logging
+    - name: fluentd-logging
   pods:
-    - name: logging-node1
+    - name: fluentd-logging-node1
       node: node1
-    - name: logging-node2
+      status: Running
+    - name: fluentd-logging-node2
       node: node2
+      status: Running
 
 steps:
+  - type: explanation
+    text: |
+      Let's see how DaemonSets operate. In a DaemonSet, there is no "replicas" field. The desired number of pods is strictly equal to the number of eligible nodes in your cluster (or a subset if node selectors are used).
+    behindTheScenes: |
+      The DaemonSet controller (part of the kube-controller-manager) watches the state of Nodes and DaemonSets in the API Server. 
+      When a new Node is registered, it automatically creates a Pod for that node. It bypasses the normal kube-scheduler by directly assigning the `spec.nodeName` field of the Pod.
+
   - type: challenge
-    prompt: "List the DaemonSets in the cluster."
-    hint: "kubectl get ds"
+    prompt: "List the DaemonSets currently running in our cluster."
+    hint: "Use `kubectl get ds` to list DaemonSets."
     expected:
       verb: get
       resource: daemonset
-    behindTheScenes: "API Server fetches DaemonSet records from etcd."
+    behindTheScenes: "The API Server authenticates your request, checks RBAC policies, and queries etcd for all DaemonSet objects in the current namespace, formatting them for display."
 
-  - type: explanation
-    text: |
-      Unlike Deployments, there is no "replicas" field in a DaemonSet. The number of pods equals the number of eligible nodes.
-    behindTheScenes: |
-      The DaemonSet controller (part of kube-controller-manager) watches Nodes.
-      When a new node joins the cluster, it automatically creates a Pod for that node.
-      When a node is removed, the Pod is garbage collected.
-      The kube-scheduler is technically bypassed for DaemonSets; the DaemonSet controller explicitly sets the `nodeName` field on the pod.
-
-  - type: observation
-    text: "Notice we have a 'logging' DaemonSet running, with pods deployed on every node to collect logs."
-    behindTheScenes: "Each kubelet ensures its local logging pod remains running."
+  - type: challenge
+    prompt: "Now list the pods. Notice that there is exactly one `fluentd-logging` pod running on each node (node1 and node2)."
+    hint: "Use `kubectl get pods -o wide` to see which node each pod is running on."
+    expected:
+      verb: get
+      resource: pod
+    behindTheScenes: "Each kubelet continually reports the status of its local pods back to the API Server. If a logging pod crashes, the kubelet will automatically restart it on that same node to maintain the DaemonSet's promise."

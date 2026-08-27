@@ -1,47 +1,59 @@
 id: 10-statefulset
 title: "StatefulSets"
 intro: |
-  Deployments are for stateless apps. Pods are identical and interchangeable.
-  For stateful apps (like databases), we need StatefulSets.
+  Deployments are perfect for stateless apps where pods are identical and interchangeable. 
+  But what about databases or messaging queues that need stable identities and persistent data?
+  
   StatefulSets provide:
-  - Ordered deployment (0, 1, 2...)
-  - Stable network identities (mysql-0, mysql-1)
-  - Persistent storage matching
+  - Ordered, graceful deployment and scaling (0, 1, 2...)
+  - Stable, unique network identifiers (e.g., mysql-0, mysql-1)
+  - Persistent storage matching that follows the pod even if it moves nodes
+  - Headless services to directly address individual pods
 
 initialState:
   statefulSets:
-    - name: mysql-db
+    - name: mysql
   pods:
-    - name: mysql-db-0
+    - name: mysql-0
       status: Running
-    - name: mysql-db-1
+    - name: mysql-1
       status: Running
-    - name: mysql-db-2
+    - name: mysql-2
       status: Running
 
 steps:
   - type: explanation
-    text: "Unlike Deployment pods which get random hashes (my-app-7d9g5), StatefulSet pods get sticky, predictable names."
-    behindTheScenes: "The StatefulSet controller creates pods with strict ordinal indexes (0, 1, 2...)."
+    text: |
+      Unlike Deployment pods which get random hashes (e.g., `webapp-7d9g5`), StatefulSet pods get sticky, predictable ordinal names (`mysql-0`, `mysql-1`).
+      This makes it easy for applications to discover peers, like setting up a database primary-replica cluster.
+    behindTheScenes: "The StatefulSet controller creates pods sequentially. It will wait for `mysql-0` to be Ready before creating `mysql-1`, ensuring safe initialization for stateful workloads."
 
   - type: challenge
-    prompt: "List the statefulsets."
-    hint: "kubectl get statefulset"
+    prompt: "List the StatefulSets in the cluster."
+    hint: "Use `kubectl get sts` to list StatefulSets."
     expected:
       verb: get
       resource: statefulset
-    behindTheScenes: "API Server retrieves the StatefulSet object."
+    behindTheScenes: "The API Server retrieves the StatefulSet object, showing the desired and ready replicas. Behind the scenes, the controller constantly reconciles the actual state to match the desired state."
 
   - type: challenge
-    prompt: "List the pods and observe their ordered names (mysql-db-0, mysql-db-1, mysql-db-2)."
-    hint: "kubectl get pods"
+    prompt: "List the pods and observe their ordered names (`mysql-0`, `mysql-1`, `mysql-2`)."
+    hint: "Use `kubectl get pods`."
     expected:
       verb: get
       resource: pod
     behindTheScenes: |
-      During creation, the StatefulSet controller waited for mysql-db-0 to be Ready before creating mysql-db-1.
-      If deleted, they terminate in reverse order (2, 1, 0).
+      If you scale down the StatefulSet, it will terminate pods in reverse order (2, then 1, then 0). 
+      This strict ordering guarantees that data replication processes can shut down cleanly without data loss.
       
   - type: explanation
-    text: "StatefulSets also ensure each pod gets its own dedicated PersistentVolume. If a pod is rescheduled, it reconnects to its exact same volume!"
-    behindTheScenes: "The controller creates PersistentVolumeClaims dynamically from a volumeClaimTemplate, linking mysql-db-0 permanently to its specific PVC."
+    text: |
+      StatefulSets also rely on a "Headless Service" (a service with `clusterIP: None`). 
+      This creates specific DNS entries for each pod, meaning you can directly connect to `mysql-0.mysql.default.svc.cluster.local`.
+    behindTheScenes: "The Endpoints controller watches the Headless Service and creates A/AAAA DNS records in CoreDNS for each individual pod, allowing stable network routing."
+
+  - type: explanation
+    text: |
+      Storage is sticky! Each pod gets its own dedicated PersistentVolume. 
+      If `mysql-1` is deleted and rescheduled to a new node, it reconnects to its exact same volume.
+    behindTheScenes: "The controller dynamically creates PersistentVolumeClaims (PVCs) from a `volumeClaimTemplate`. Once created, a PVC is permanently bound to that specific pod index, even across restarts."

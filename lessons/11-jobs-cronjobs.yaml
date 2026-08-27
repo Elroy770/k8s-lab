@@ -1,41 +1,47 @@
 id: 11-jobs-cronjobs
 title: "Jobs and CronJobs"
 intro: |
-  ReplicaSets and Deployments run processes that should never stop (like web servers).
-  What if you want to run a batch task that does some work and then finishes?
-  You use a Job. A CronJob is simply a Job that runs on a schedule.
+  ReplicaSets, Deployments, and DaemonSets run continuous processes that should never stop.
+  But what if you need to run a batch processing task, a database migration, or an overnight backup that does some work and then finishes?
+  
+  That's where Jobs come in. A Job runs pods to completion. 
+  A CronJob is simply a Job that runs on a recurring time-based schedule.
 
 initialState:
   jobs:
     - name: data-processor
       status: Complete
+  cronJobs:
+    - name: nightly-backup
   pods:
     - name: data-processor-xyz
       status: Completed
 
 steps:
   - type: explanation
-    text: "A Job creates one or more Pods and ensures that a specified number of them successfully terminate."
+    text: |
+      A Job creates one or more Pods and ensures that a specified number of them successfully terminate.
+      You can run them sequentially or in parallel using the `completions` and `parallelism` fields.
     behindTheScenes: |
-      The Job controller monitors Pods it creates. 
-      If a Pod fails (exits with non-zero status), the Job controller starts a new one based on the retry policy.
-      Once the desired number of successful completions is reached, the Job is Complete.
+      The Job controller actively monitors the Pods it creates. 
+      If a Pod fails or a node crashes, the Job controller automatically starts a new Pod based on the `backoffLimit` (retry policy). 
+      Once the desired number of successful completions is reached, the Job is marked as Complete.
 
   - type: challenge
-    prompt: "List the jobs in the cluster to see our completed task."
-    hint: "kubectl get jobs"
+    prompt: "List the Jobs in the cluster to see our batch task."
+    hint: "Use `kubectl get jobs`."
     expected:
       verb: get
       resource: job
-    behindTheScenes: "API Server fetches Job status."
+    behindTheScenes: "The API Server fetches the Job status from etcd. Unlike Deployments, the pods are not deleted immediately after finishing so you can check their logs, though you can use `ttlSecondsAfterFinished` to automatically clean them up."
 
   - type: explanation
     text: |
-      CronJobs manage Jobs using a time-based schedule (Cron format).
-      Concurrency policies dictate what happens if a new CronJob run is scheduled but the previous one hasn't finished:
-      - Allow (run both)
-      - Forbid (skip new run)
-      - Replace (kill old, start new)
+      CronJobs manage Jobs using the standard time-based Unix Cron format (e.g., `0 0 * * *` for midnight daily).
+      They include concurrency policies to dictate what happens if a run takes too long and overlaps with the next scheduled run:
+      - **Allow**: Run both simultaneously.
+      - **Forbid**: Skip the new run.
+      - **Replace**: Kill the currently running job and start the new one.
     behindTheScenes: |
-      The CronJob controller runs inside kube-controller-manager. 
-      It checks schedules every 10 seconds. When it's time, it creates a Job object, which then creates Pods.
+      The CronJob controller, running inside the kube-controller-manager, checks schedules every 10 seconds. 
+      When a schedule hits, it generates a Job object. The Job controller then takes over and creates the necessary Pods to execute the work.

@@ -1,9 +1,9 @@
 id: 15-services-clusterip
-title: "Services: ClusterIP"
+title: "Services: Stable Networking with ClusterIP"
 intro: |
-  The Pod IP Problem: Pods are ephemeral. When they die and are replaced by a controller, they get new IP addresses.
-  How does a frontend app reliably connect to a backend app?
-  Services! They provide a stable virtual IP (ClusterIP) and DNS name.
+  The Pod IP Problem: Pods are ephemeral. When they crash and are replaced by a controller (like a Deployment), they get entirely new IP addresses.
+  How does a frontend app reliably connect to a backend app without tracking shifting IPs?
+  Enter **Services**! They provide a stable virtual IP (ClusterIP) and a reliable DNS name.
 
 initialState:
   deployments:
@@ -20,23 +20,21 @@ initialState:
 
 steps:
   - type: explanation
-    text: "ClusterIP is the default Service type. It exposes the Service on a cluster-internal IP. Choosing this makes the Service only reachable from within the cluster."
-    behindTheScenes: |
-      When the Service is created, the Endpoints controller (in kube-controller-manager) finds Pods matching the selector and creates an Endpoints object containing their IPs.
+    text: |
+      `ClusterIP` is the default Service type. It exposes the Service on a stable, cluster-internal IP address.
+      This ensures the Service is only reachable from *within* the cluster, perfect for internal microservices.
+    behindTheScenes: "When a Service is created, the Endpoints controller (running inside the kube-controller-manager) watches for Pods matching the Service's selector. It creates an Endpoints (or EndpointSlice) object containing the IPs of all healthy, matching Pods."
 
   - type: challenge
-    prompt: "Get the services."
-    hint: "kubectl get svc"
+    prompt: "List the services to view the assigned ClusterIP for our backend."
+    hint: "Run `kubectl get svc` or `kubectl get services`."
     expected:
       verb: get
       resource: service
-    behindTheScenes: "API server fetches Service configurations."
+    behindTheScenes: "The API Server queries etcd for Service resources and returns their configurations, including the dynamically allocated ClusterIP from the cluster's service subnet."
 
   - type: explanation
     text: |
-      When a pod sends traffic to the ClusterIP, how does it reach the backend pod?
-      Load balancing and routing!
-    behindTheScenes: |
-      The kube-proxy process on EVERY node watches the API server for new Services and Endpoints.
-      It configures iptables (or IPVS) rules on its node.
-      When traffic hits the virtual ClusterIP, iptables rules perform Destination NAT (DNAT) to rewrite the destination IP to one of the healthy backend Pod IPs.
+      When a pod sends traffic to the virtual ClusterIP, how does it physically reach one of the backend pods?
+      It's handled by transparent load balancing and routing on every node!
+    behindTheScenes: "The `kube-proxy` daemon runs on EVERY node and watches the API server for new Services and Endpoints. By default, it configures `iptables` (or IPVS) rules in the kernel. When packet traffic hits the virtual ClusterIP, the iptables rules perform Destination NAT (DNAT), randomly rewriting the destination IP to one of the healthy backend Pod IPs before forwarding it."

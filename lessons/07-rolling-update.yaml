@@ -1,18 +1,19 @@
 id: 07-rolling-update
 title: "Rolling Updates"
 intro: |
-  Let's update the image in our Deployment. 
-  By default, Deployments use a "RollingUpdate" strategy. 
-  This means it gradually creates new pods and scales down old ones, ensuring zero downtime!
-
+  It's time to release version 1.19 of our application! 
+  Because we are using a Deployment, we can leverage its default "RollingUpdate" strategy. 
+  Instead of stopping all old pods at once (which causes downtime), a rolling update gradually creates pods for the new version while terminating pods of the old version, ensuring zero downtime.
+  
 initialState:
   deployments:
     - name: my-app
       replicas: 3
-      image: nginx:latest
+      image: nginx:1.18
   replicaSets:
     - name: my-app-old
       owner: my-app
+      replicas: 3
   pods:
     - name: my-app-old-a
       owner: my-app-old
@@ -22,37 +23,47 @@ initialState:
       owner: my-app-old
 
 steps:
+  - type: explanation
+    text: |
+      Rolling updates are controlled by two parameters: `maxSurge` (how many extra pods can be created above the desired amount) and `maxUnavailable` (how many pods can be offline during the update). 
+      Let's trigger an update by changing the container image.
+    behindTheScenes: |
+      The Deployment controller is watching the `my-app` Deployment. Currently, it sees that the actual state (managed by `my-app-old` ReplicaSet) matches the desired state.
+
   - type: challenge
-    prompt: "Update the 'my-app' deployment to use the 'nginx:1.19' image."
+    prompt: "Update the 'my-app' deployment to use the new 'nginx:1.19' image."
     hint: "kubectl set image deployment/my-app nginx=nginx:1.19"
     expected:
       verb: set
       resource: deployment
       name: my-app
     behindTheScenes: |
-      API Server updates the Deployment spec in etcd.
-      Deployment controller detects the pod template changed.
-      It creates a NEW ReplicaSet for the new template, while keeping the old one.
+      Your command updates the pod template in the Deployment spec in etcd.
+      The Deployment controller detects this change. It hashes the new template and creates a BRAND NEW ReplicaSet (`my-app-new`) with 0 desired replicas initially.
 
   - type: observation
-    text: "The Deployment controller orchestrates a rolling update based on maxSurge and maxUnavailable settings."
+    text: |
+      The rollout has begun! The deployment is managing two ReplicaSets simultaneously to transition smoothly.
     behindTheScenes: |
-      Deployment controller scales UP the new ReplicaSet by 1 (or more based on maxSurge).
-      Once the new pod is ready, it scales DOWN the old ReplicaSet.
-      This repeats until the new ReplicaSet reaches desired replicas (3) and the old one reaches 0.
+      The Deployment controller orchestrates a dance:
+      1. It scales UP the new ReplicaSet by `maxSurge` (e.g., +1 pod).
+      2. It waits for the new pod to become ready.
+      3. It scales DOWN the old ReplicaSet by `maxUnavailable` (e.g., -1 pod).
+      This cycle repeats until the new ReplicaSet has 3 replicas and the old one has 0.
 
   - type: challenge
-    prompt: "Check the rollout status of your deployment."
+    prompt: "Check the rollout status of your deployment to watch the progress."
     hint: "kubectl rollout status deployment/my-app"
     expected:
       verb: rollout
       resource: deployment
       name: my-app
     behindTheScenes: |
-      API Server reports the progress. 
-      Under the hood, it's just checking if the new ReplicaSet's availableReplicas match the desired replicas.
+      The `rollout status` command watches the Deployment's status field. The Deployment controller constantly updates this status as the dual-replicaset orchestration progresses, marking the rollout complete when `availableReplicas` matches the desired replicas and the old ReplicaSet is fully scaled down.
 
   - type: explanation
     text: |
-      Contrast this with the 'Recreate' strategy, which kills all old pods before starting any new ones, causing application downtime.
-    behindTheScenes: "If Recreate was used, the Deployment controller would scale the old RS to 0 immediately, wait for pods to terminate, then scale the new RS to 3."
+      By the end of the rollout, your application has been completely updated without a single dropped request! 
+      Contrast this with the 'Recreate' strategy, which scales the old ReplicaSet to 0, waits for all pods to die, and only then scales the new ReplicaSet up, resulting in noticeable downtime.
+    behindTheScenes: |
+      The old ReplicaSet is NOT deleted. It is kept around with 0 replicas. Its pod-template-hash acts as a snapshot of the previous configuration, which is exactly how Deployments enable rollbacks!

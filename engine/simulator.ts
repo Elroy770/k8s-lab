@@ -6,6 +6,8 @@ export interface ExecutionResult {
   newState: ClusterState;
   isCorrect: boolean;
   message?: string;
+  componentFlow?: string[];
+  actionDescription?: string;
 }
 
 function formatServicePorts(ports: string | ServicePort[] | undefined): string {
@@ -498,12 +500,41 @@ Events:            <none>`;
     output = `unknown command: kubectl ${verb}`;
   }
 
+  let componentFlow: string[] = ['Terminal', 'kube-apiserver'];
+  let actionDescription: string = 'Command processed by kube-apiserver';
+
+  if (verb === 'run') {
+    componentFlow = ['Terminal', 'kube-apiserver', 'etcd', 'kube-scheduler', 'kubelet', 'CRI'];
+    actionDescription = `API Server validated Pod '${name || 'pod'}' & stored in etcd → Scheduler assigned worker-node-1 → kubelet instructed CRI to pull '${flags.image || 'nginx'}' and start container.`;
+  } else if (verb === 'get' || verb === 'describe') {
+    componentFlow = ['Terminal', 'kube-apiserver', 'etcd'];
+    actionDescription = `API Server queried the current desired and live state directly from etcd key-value store.`;
+  } else if (verb === 'delete') {
+    componentFlow = ['Terminal', 'kube-apiserver', 'etcd', 'kubelet', 'kube-controller-manager'];
+    actionDescription = `API Server recorded deletion in etcd → kubelet stopped & cleaned up container → kube-controller-manager observed state change.`;
+  } else if (verb === 'scale') {
+    componentFlow = ['Terminal', 'kube-apiserver', 'etcd', 'kube-controller-manager', 'kube-scheduler', 'kubelet'];
+    actionDescription = `API Server updated desired replicas in etcd → kube-controller-manager detected replica count drift → adjusted pod counts → Scheduler placed new pods.`;
+  } else if (verb === 'set') {
+    componentFlow = ['Terminal', 'kube-apiserver', 'etcd', 'kube-controller-manager', 'kube-scheduler', 'kubelet'];
+    actionDescription = `Deployment Controller created new ReplicaSet with updated image template → performed rolling update by orchestrating pod lifecycles.`;
+  } else if (verb === 'rollout') {
+    componentFlow = ['Terminal', 'kube-apiserver', 'etcd', 'kube-controller-manager', 'kubelet'];
+    actionDescription = `Deployment Controller read revision history from etcd → restored previous ReplicaSet template → reconciled pod counts.`;
+  } else if (verb === 'logs') {
+    componentFlow = ['Terminal', 'kube-apiserver', 'kubelet', 'CRI'];
+    actionDescription = `API Server opened streaming connection to kubelet on worker node → kubelet retrieved stdout/stderr logs directly from CRI container runtime.`;
+  } else if (verb === 'events') {
+    componentFlow = ['Terminal', 'kube-apiserver', 'etcd'];
+    actionDescription = `API Server retrieved recorded cluster lifecycle and controller events from etcd.`;
+  }
+
   // Validate step completion
   if (currentStep && currentStep.type === "challenge" && currentStep.expected) {
     const exp = currentStep.expected;
     if (exp.verb.toLowerCase() === verb.toLowerCase()) {
       if (!exp.resource || (resource && exp.resource.toLowerCase() === resource.toLowerCase())) {
-        if (!exp.name || (name && name.toLowerCase().includes(exp.name.toLowerCase())) || verb === "delete" || verb === "set" || verb === "rollout") {
+        if (!exp.name || (name && name.toLowerCase().includes(exp.name.toLowerCase())) || verb === "delete" || verb === "set" || verb === "rollout" || verb === "logs") {
           matchedChallenge = true;
         }
       }
@@ -514,5 +545,7 @@ Events:            <none>`;
     output,
     newState: nextState,
     isCorrect: matchedChallenge,
+    componentFlow,
+    actionDescription,
   };
 }

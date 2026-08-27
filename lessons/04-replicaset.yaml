@@ -1,10 +1,9 @@
 id: 04-replicaset
 title: "ReplicaSets"
 intro: |
-  A ReplicaSet ensures that a specified number of pod replicas are running at any given time.
-  It provides self-healing! If a pod dies, the ReplicaSet starts a new one.
-  It uses "label selectors" to know which pods it manages.
-
+  A ReplicaSet is a Kubernetes controller that ensures a specified number of identical Pod replicas are running at all times.
+  It is the foundation of self-healing in Kubernetes: if a Pod dies, the ReplicaSet instantly detects the shortage and starts a new one to replace it.
+  ReplicaSets use "label selectors" to identify and manage their target Pods.
 initialState:
   replicaSets:
     - name: frontend
@@ -24,37 +23,61 @@ initialState:
       labels:
         app: frontend
       owner: frontend
-
 steps:
-  - type: observation
-    text: "We have a ReplicaSet named 'frontend' configured to maintain 3 replicas."
-    behindTheScenes: "The ReplicaSet controller inside kube-controller-manager is actively running a reconciliation loop: 'I desire 3 pods with label app=frontend. I see 3 pods. All is well.'"
+  - title: "Understand the ReplicaSet"
+    type: observation
+    text: "We have pre-provisioned a ReplicaSet named 'frontend' that is configured to maintain exactly 3 replicas of our application."
+    behindTheScenes: |
+      - kube-controller-manager: The ReplicaSet controller runs continuously inside the controller manager. It queries the API server: 'I desire 3 Pods matching app=frontend. I see 3 Pods. The state is synchronized.'
+      - kube-apiserver: Serves the current state to the controller manager.
+      - etcd: Stores the ReplicaSet definition and the state of the 3 running Pods.
+      - kubelet & CRI: Keep the 3 containers running happily on the worker nodes.
+      - kube-proxy: Routes traffic to these 3 Pods seamlessly.
+      - kube-scheduler: Idles as all Pods are already assigned to nodes.
 
-  - type: challenge
-    prompt: "List the pods to see the 3 replicas."
-    hint: "kubectl get pods"
+  - title: "List the Replicas"
+    type: challenge
+    prompt: "List the pods to see the 3 replicas actively managed by the ReplicaSet."
+    hint: "Use the `kubectl get` command: `kubectl get pods`"
     expected:
       verb: get
       resource: pod
-    behindTheScenes: "API Server reads pod state from etcd."
+    behindTheScenes: |
+      - kube-apiserver: Receives your request and queries the backend.
+      - etcd: Fetches the data for frontend-a, frontend-b, and frontend-c.
+      - kubelet, CRI, kube-proxy, kube-scheduler, kube-controller-manager: Continue operating normally in the background without direct involvement in this read operation.
 
-  - type: challenge
-    prompt: "Delete one of the pods, e.g., frontend-a."
-    hint: "kubectl delete pod frontend-a"
+  - title: "Simulate a Failure"
+    type: challenge
+    prompt: "Delete one of the pods, for example 'frontend-a', to simulate a node crash or application failure."
+    hint: "Use the `kubectl delete` command: `kubectl delete pod frontend-a` (or any other pod name from the list)."
     expected:
       verb: delete
       resource: pod
     behindTheScenes: |
-      API Server marks pod for deletion. kubelet terminates it.
-      CRITICAL STEP: The ReplicaSet controller notices the change via its watch on the API server.
-      Actual (2) != Desired (3). 
-      ReplicaSet controller sends a request to the API Server to create a new pod.
-      Scheduler assigns it a node, kubelet starts it.
+      - kube-apiserver: Marks the 'frontend-a' Pod for deletion in etcd.
+      - kubelet & CRI: Receive the deletion event and begin terminating the 'frontend-a' container.
+      - kube-controller-manager: CRITICAL STEP! The ReplicaSet controller instantly receives a watch event from the API server that a Pod was deleted. It calculates: Actual (2) != Desired (3). It immediately sends a POST request to the API server to create a new Pod.
+      - kube-scheduler: Sees the brand new, unscheduled Pod created by the ReplicaSet. It evaluates nodes and assigns the new Pod to an appropriate node.
+      - kubelet & CRI (on the new node): See the scheduling assignment, pull the image, and start the replacement container.
+      - kube-proxy: Updates network rules to remove the old Pod's IP and add the new Pod's IP.
 
-  - type: challenge
-    prompt: "List the pods again to see the self-healing in action. A new pod will have replaced the deleted one."
-    hint: "kubectl get pods"
+  - title: "Verify Self-Healing"
+    type: challenge
+    prompt: "List the pods again to witness Kubernetes self-healing in action. You should see a brand new pod replacing the one you deleted."
+    hint: "Use the `kubectl get` command: `kubectl get pods`"
     expected:
       verb: get
       resource: pod
-    behindTheScenes: "API server returns the current list of pods, which now includes a freshly scheduled pod to replace the dead one."
+    behindTheScenes: |
+      - kube-apiserver: Fetches the latest cluster state from etcd.
+      - etcd: Returns the list containing the two original Pods and the freshly created replacement Pod.
+      - kube-controller-manager: Is satisfied again, as Actual (3) == Desired (3).
+      - kubelet, CRI, kube-proxy: Ensure the new Pod is fully integrated and running.
+      - kube-scheduler: Rests after successfully scheduling the replacement.
+
+  - title: "Lesson Complete"
+    type: transition
+    text: "Great job! You have witnessed the self-healing power of ReplicaSets. In the next lesson, we will explore Deployments, which manage ReplicaSets to provide seamless rolling updates."
+    behindTheScenes: |
+      All core components (kube-apiserver, etcd, kube-scheduler, kube-controller-manager, kubelet, kube-proxy, and CRI) have worked in perfect harmony to restore your desired state, demonstrating the core declarative power of Kubernetes.

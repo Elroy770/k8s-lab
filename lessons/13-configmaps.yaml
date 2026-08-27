@@ -1,35 +1,37 @@
 id: 13-configmaps
-title: "ConfigMaps"
+title: "ConfigMaps: Decoupling Configuration"
 intro: |
-  ConfigMaps allow you to decouple configuration artifacts from image content.
-  You can inject them into your Pods as:
-  1. Environment variables
-  2. Command-line arguments
-  3. Files in a Volume
-  4. Directly from the Kubernetes API
+  ConfigMaps allow you to decouple configuration artifacts from image content to keep containerized applications portable.
+  You can inject ConfigMaps into your Pods as environment variables, command-line arguments, or as files in a Volume.
+  Let's explore how to create and use ConfigMaps!
 
 initialState:
   configMaps:
     - name: app-config
+      data:
+        DATABASE_URL: "postgres://db:5432"
+        LOG_LEVEL: "INFO"
 
 steps:
   - type: challenge
-    prompt: "Get the ConfigMaps in the cluster."
-    hint: "kubectl get configmap"
+    prompt: "Let's start by listing the ConfigMaps in the cluster to see what's available."
+    hint: "Use `kubectl get cm` or `kubectl get configmap`."
     expected:
       verb: get
       resource: configmap
-    behindTheScenes: "API Server reads ConfigMap definitions from etcd."
+    behindTheScenes: "The kubectl CLI sends an HTTP GET request to the Kubernetes API Server, which authenticates the request and queries etcd to retrieve the list of ConfigMap objects."
 
   - type: challenge
-    prompt: "Describe the 'app-config' ConfigMap to see its contents."
-    hint: "kubectl describe configmap app-config"
+    prompt: "Great! Now describe the 'app-config' ConfigMap to see its stored key-value pairs (the actual configuration data)."
+    hint: "Run `kubectl describe configmap app-config`."
     expected:
       verb: describe
       resource: configmap
       name: app-config
-    behindTheScenes: "API Server retrieves the keys and values stored in etcd for this ConfigMap."
+    behindTheScenes: "The API Server fetches the specific ConfigMap metadata and payload from etcd. Note that ConfigMap data is stored in plain text, making it suitable only for non-sensitive data."
 
   - type: explanation
-    text: "When a Pod uses a ConfigMap as a volume, kubelet mounts it on the node and keeps it updated if the ConfigMap changes."
-    behindTheScenes: "kubelet's SyncLoop detects changes to the ConfigMap, then updates the files mounted in the Pod's filesystem."
+    text: |
+      When a Pod uses a ConfigMap as a volume, Kubernetes mounts it into the Pod's filesystem. 
+      If you update the ConfigMap, the mounted files are automatically updated as well (though it can take a minute or two).
+    behindTheScenes: "The kubelet running on the worker node periodically syncs with the API Server (SyncLoop). When it detects a change in the ConfigMap, it updates the files mounted via the volume plugin in the container's filesystem."

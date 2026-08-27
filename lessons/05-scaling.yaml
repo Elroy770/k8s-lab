@@ -1,9 +1,10 @@
 id: 05-scaling
 title: "Scaling with ReplicaSets"
 intro: |
-  ReplicaSets make it trivial to scale your application up or down.
-  By changing the "desired" number of replicas, the ReplicaSet controller will automatically create or terminate pods to match that number.
-
+  We've seen that Pods are ephemeral, and ReplicaSets ensure a specific number of them are always running for reliability.
+  But what happens when traffic to your application spikes?
+  ReplicaSets make it trivial to scale your application horizontally up or down. By simply changing the "desired" number of replicas, the ReplicaSet controller will automatically create or terminate pods to match that target state. Let's see this in action.
+  
 initialState:
   replicaSets:
     - name: frontend
@@ -12,50 +13,69 @@ initialState:
         app: frontend
   pods:
     - name: frontend-a
+      owner: frontend
       labels:
         app: frontend
     - name: frontend-b
+      owner: frontend
       labels:
         app: frontend
     - name: frontend-c
+      owner: frontend
       labels:
         app: frontend
 
 steps:
+  - type: explanation
+    text: |
+      Currently, the `frontend` ReplicaSet is maintaining 3 pods. We anticipate a surge in traffic and need to increase our capacity to 5 pods.
+    behindTheScenes: |
+      The kube-controller-manager is running a reconciliation loop for the frontend ReplicaSet. It continually checks the API server (reading from etcd) and sees that desired state (3) matches the actual state (3 pods match the selector).
+
   - type: challenge
-    prompt: "Scale the 'frontend' ReplicaSet up to 5 replicas."
+    prompt: "Scale the 'frontend' ReplicaSet up to 5 replicas to handle the incoming traffic."
     hint: "kubectl scale rs frontend --replicas=5"
     expected:
       verb: scale
       resource: replicaset
       name: frontend
     behindTheScenes: |
-      User updates the ReplicaSet spec in etcd via the API Server.
-      ReplicaSet controller sees desired=5, actual=3. 
-      It requests 2 new pods from the API Server.
-      kube-scheduler assigns nodes, kubelets start the containers.
+      You send an API request updating the ReplicaSet's desired replicas to 5 in etcd.
+      The ReplicaSet controller's watch triggers. It sees desired=5, actual=3.
+      It immediately sends requests to the API Server to create 2 new Pod objects.
+      The kube-scheduler detects unscheduled pods, assigns them to Nodes, and the respective kubelets start the containers.
 
   - type: challenge
-    prompt: "Check the pods to see 5 running."
+    prompt: "Verify the scale-up by listing the pods. You should see 5 running."
     hint: "kubectl get pods"
     expected:
       verb: get
       resource: pod
-    behindTheScenes: "API Server fetches 5 pod records from etcd."
+    behindTheScenes: |
+      The API Server fetches the 5 pod records from etcd and returns them to your client. 
+      Behind the scenes, the kubelets are constantly updating the API Server with the status of these pods.
+
+  - type: explanation
+    text: |
+      The traffic spike has passed, and running 5 pods is now a waste of resources. Let's scale back down to save costs.
+    behindTheScenes: |
+      The cluster is currently stable with 5 pods running. The ReplicaSet controller is passively monitoring.
 
   - type: challenge
-    prompt: "Now scale the 'frontend' ReplicaSet down to 2 replicas."
+    prompt: "Scale the 'frontend' ReplicaSet down to 2 replicas."
     hint: "kubectl scale rs frontend --replicas=2"
     expected:
       verb: scale
       resource: replicaset
       name: frontend
     behindTheScenes: |
-      ReplicaSet controller sees desired=2, actual=5.
-      It selects 3 pods and issues delete requests to the API Server.
-      kubelets on respective nodes terminate the containers gracefully.
+      The API Server updates etcd with desired=2.
+      The ReplicaSet controller sees desired=2, actual=5.
+      It selects 3 pods (usually prioritizing unhealthy or newer pods) and issues delete requests to the API Server.
+      The API Server marks the pods for deletion. The kubelets on the respective nodes see this and terminate the containers gracefully.
       
   - type: explanation
     text: |
-      This reconciliation loop (checking actual state vs desired state and making corrections) is the core pattern of Kubernetes!
-    behindTheScenes: "The kube-controller-manager constantly runs these loops for various resources, keeping the cluster in the desired state."
+      Excellent! This reconciliation loop—constantly checking the actual state against the desired state and taking actions to correct any drift—is the fundamental control pattern of Kubernetes.
+    behindTheScenes: |
+      The kube-controller-manager constantly runs these control loops for all resources, completely asynchronously, ensuring the cluster always works towards your declared desired state.

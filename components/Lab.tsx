@@ -1,450 +1,909 @@
-'use client'
+"use client";
 
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Lesson, ClusterState, Pod, ReplicaSet, Deployment,
-  DaemonSet, StatefulSet, Job, CronJob, Service,
-  Namespace, ConfigMapResource, SecretResource 
-} from '@/engine/cluster-state';
-import { executeCommand } from '@/engine/simulator';
+import React, { useState, useEffect, useRef } from "react";
+import {
+  Lesson,
+  ClusterState,
+  Pod,
+  ReplicaSet,
+  Deployment,
+  DaemonSet,
+  StatefulSet,
+  Job,
+  CronJob,
+  Service,
+  ServicePort,
+  Namespace,
+  ConfigMapResource,
+  SecretResource,
+} from "@/engine/cluster-state";
+import { executeCommand, ExecutionResult } from "@/engine/simulator";
 
-export default function Lab({ lessons }: { lessons: Lesson[] }) {
-  const [activeLesson, setActiveLesson] = useState(0);
-  const [activeStep, setActiveStep] = useState(0);
-  const [terminalOutput, setTerminalOutput] = useState<{ type: 'cmd' | 'out', text: string }[]>([]);
+interface LabProps {
+  lessons: Lesson[];
+}
+
+interface TerminalItem {
+  id: string;
+  type: "cmd" | "out" | "success" | "system" | "error";
+  text: string;
+}
+
+export default function Lab({ lessons }: LabProps) {
+  const [activeLessonIdx, setActiveLessonIdx] = useState(0);
+  const [activeStepIdx, setActiveStepIdx] = useState(0);
+  const [terminalOutput, setTerminalOutput] = useState<TerminalItem[]>([
+    {
+      id: "init-1",
+      type: "system",
+      text: "☸ Kubernetes Story Lab v2.0 — Interactive Learning Cluster",
+    },
+    {
+      id: "init-2",
+      type: "system",
+      text: "Type 'help' for available kubectl commands, or follow the guided missions on the left.\n",
+    },
+  ]);
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-  const [currentCommand, setCurrentCommand] = useState('');
-  const [clusterState, setClusterState] = useState<ClusterState>({
-    pods: [], replicaSets: [], deployments: [], daemonSets: [],
-    statefulSets: [], jobs: [], cronJobs: [], services: [],
-    namespaces: [], configMaps: [], secrets: [],
-  });
-  const [showBehindTheScenes, setShowBehindTheScenes] = useState(false);
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const [currentCommand, setCurrentCommand] = useState("");
   const [showHint, setShowHint] = useState(false);
+  const [showBehindTheScenes, setShowBehindTheScenes] = useState(false);
+  const [recentFlow, setRecentFlow] = useState<{
+    flow: string[];
+    description: string;
+    timestamp: number;
+  } | null>(null);
+  const [stepCompleted, setStepCompleted] = useState(false);
+
+  const [clusterState, setClusterState] = useState<ClusterState>({
+    pods: [],
+    replicaSets: [],
+    deployments: [],
+    daemonSets: [],
+    statefulSets: [],
+    jobs: [],
+    cronJobs: [],
+    services: [],
+    namespaces: [],
+    configMaps: [],
+    secrets: [],
+  });
+
   const terminalEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const lesson = lessons[activeLesson];
-  const step = lesson?.steps?.[activeStep];
+  const currentLesson = lessons[activeLessonIdx] || lessons[0];
+  const currentStep = currentLesson?.steps?.[activeStepIdx];
 
+  // Initialize cluster state when lesson changes
   useEffect(() => {
-    // Initialize cluster state from lesson's initialState when lesson changes
-    if (lesson?.initialState) {
-      setClusterState({
-        pods: lesson.initialState.pods || [],
-        replicaSets: lesson.initialState.replicaSets || [],
-        deployments: lesson.initialState.deployments || [],
-        daemonSets: lesson.initialState.daemonSets || [],
-        statefulSets: lesson.initialState.statefulSets || [],
-        jobs: lesson.initialState.jobs || [],
-        cronJobs: lesson.initialState.cronJobs || [],
-        services: lesson.initialState.services || [],
-        namespaces: lesson.initialState.namespaces || [],
-        configMaps: lesson.initialState.configMaps || [],
-        secrets: lesson.initialState.secrets || [],
-      });
-    } else {
-      setClusterState({
-        pods: [], replicaSets: [], deployments: [], daemonSets: [],
-        statefulSets: [], jobs: [], cronJobs: [], services: [],
-        namespaces: [], configMaps: [], secrets: [],
-      });
+    if (currentLesson) {
+      if (currentLesson.initialState) {
+        setClusterState({
+          pods: currentLesson.initialState.pods || [],
+          replicaSets: currentLesson.initialState.replicaSets || [],
+          deployments: currentLesson.initialState.deployments || [],
+          daemonSets: currentLesson.initialState.daemonSets || [],
+          statefulSets: currentLesson.initialState.statefulSets || [],
+          jobs: currentLesson.initialState.jobs || [],
+          cronJobs: currentLesson.initialState.cronJobs || [],
+          services: currentLesson.initialState.services || [],
+          namespaces: currentLesson.initialState.namespaces || [],
+          configMaps: currentLesson.initialState.configMaps || [],
+          secrets: currentLesson.initialState.secrets || [],
+        });
+      } else {
+        setClusterState({
+          pods: [],
+          replicaSets: [],
+          deployments: [],
+          daemonSets: [],
+          statefulSets: [],
+          jobs: [],
+          cronJobs: [],
+          services: [],
+          namespaces: [],
+          configMaps: [],
+          secrets: [],
+        });
+      }
+      setActiveStepIdx(0);
+      setShowHint(false);
+      setShowBehindTheScenes(false);
+      setStepCompleted(false);
+      setRecentFlow(null);
+
+      setTerminalOutput((prev) => [
+        ...prev,
+        {
+          id: `lesson-${Date.now()}`,
+          type: "system",
+          text: `\n======================================================\n📚 Lesson ${
+            activeLessonIdx + 1
+          }: ${currentLesson.title}\n======================================================\n`,
+        },
+      ]);
     }
-  }, [activeLesson, lesson]);
+  }, [activeLessonIdx, currentLesson]);
 
-  const scrollToBottom = () => {
-    terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
+  // Reset step completed flag when step index changes
   useEffect(() => {
-    scrollToBottom();
+    setStepCompleted(false);
+    setShowHint(false);
+  }, [activeStepIdx]);
+
+  // Auto-scroll terminal
+  useEffect(() => {
+    terminalEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [terminalOutput]);
 
-  const handleCommand = (cmd: string) => {
-    if (!cmd.trim()) return;
-    
-    if (cmd.trim() === 'clear') {
+  const handleCommandRun = (cmdString: string) => {
+    const cmd = cmdString.trim();
+    if (!cmd) return;
+
+    if (cmd === "clear") {
       setTerminalOutput([]);
-      setCurrentCommand('');
+      setCurrentCommand("");
       return;
     }
 
-    const { output, newState, isCorrect } = executeCommand(cmd, clusterState, step);
-    
-    setTerminalOutput(prev => [
-      ...prev, 
-      { type: 'cmd', text: cmd },
-      ...(output ? [{ type: 'out' as const, text: output }] : [])
-    ]);
-    
-    if (newState) {
-      setClusterState(newState);
-    }
-    
-    setCommandHistory(prev => [...prev, cmd]);
-    setHistoryIndex(-1);
-    setCurrentCommand('');
+    const result: ExecutionResult = executeCommand(cmd, clusterState, currentStep);
 
-    if (isCorrect && activeStep < lesson.steps.length - 1) {
-      setTimeout(() => {
-        setActiveStep(s => s + 1);
-        setShowHint(false);
-        setShowBehindTheScenes(false);
-      }, 1000);
+    const newItems: TerminalItem[] = [
+      {
+        id: `cmd-${Date.now()}`,
+        type: "cmd",
+        text: `learner@k8s:~$ ${cmd}`,
+      },
+    ];
+
+    if (result.output) {
+      newItems.push({
+        id: `out-${Date.now()}`,
+        type: result.isCorrect
+          ? "success"
+          : result.output.toLowerCase().includes("error")
+          ? "error"
+          : "out",
+        text: result.output,
+      });
+    }
+
+    setClusterState(result.newState);
+    setTerminalOutput((prev) => [...prev, ...newItems]);
+    setCommandHistory((prev) => [...prev, cmd]);
+    setHistoryIndex(null);
+    setCurrentCommand("");
+
+    if (result.componentFlow && result.actionDescription) {
+      setRecentFlow({
+        flow: result.componentFlow,
+        description: result.actionDescription,
+        timestamp: Date.now(),
+      });
+    }
+
+    if (result.isCorrect) {
+      setStepCompleted(true);
+      if (activeStepIdx < (currentLesson?.steps?.length || 1) - 1) {
+        setTimeout(() => {
+          setActiveStepIdx((s) => s + 1);
+        }, 1200);
+      }
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      handleCommand(currentCommand);
-    } else if (e.key === 'ArrowUp') {
+    if (e.key === "Enter") {
       e.preventDefault();
-      if (commandHistory.length > 0) {
-        const nextIndex = historyIndex + 1;
-        if (nextIndex < commandHistory.length) {
-          setHistoryIndex(nextIndex);
-          setCurrentCommand(commandHistory[commandHistory.length - 1 - nextIndex]);
-        }
-      }
-    } else if (e.key === 'ArrowDown') {
+      handleCommandRun(currentCommand);
+    } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      if (historyIndex > 0) {
-        const nextIndex = historyIndex - 1;
-        setHistoryIndex(nextIndex);
-        setCurrentCommand(commandHistory[commandHistory.length - 1 - nextIndex]);
-      } else if (historyIndex === 0) {
-        setHistoryIndex(-1);
-        setCurrentCommand('');
+      if (commandHistory.length === 0) return;
+      const nextIdx =
+        historyIndex === null
+          ? commandHistory.length - 1
+          : Math.max(0, historyIndex - 1);
+      setHistoryIndex(nextIdx);
+      setCurrentCommand(commandHistory[nextIdx]);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (historyIndex === null) return;
+      const nextIdx = historyIndex + 1;
+      if (nextIdx >= commandHistory.length) {
+        setHistoryIndex(null);
+        setCurrentCommand("");
+      } else {
+        setHistoryIndex(nextIdx);
+        setCurrentCommand(commandHistory[nextIdx]);
       }
     }
   };
 
-  if (!lesson) return <div className="flex h-screen items-center justify-center bg-[#0b101b] text-white">Loading...</div>;
+  const handleNextStep = () => {
+    if (activeStepIdx < (currentLesson?.steps?.length || 1) - 1) {
+      setActiveStepIdx(activeStepIdx + 1);
+    } else if (activeLessonIdx < lessons.length - 1) {
+      setActiveLessonIdx(activeLessonIdx + 1);
+    }
+  };
 
-  return (
-    <div className="flex flex-col h-screen bg-[#0b101b] text-gray-200 font-sans">
-      {/* Top Bar Navigation */}
-      <div className="flex items-center justify-between px-6 py-4 bg-[#121826] border-b border-gray-800">
-        <div className="flex items-center gap-4">
-          <select 
-            className="bg-[#1e293b] text-white px-4 py-2 rounded-md border border-gray-700 outline-none focus:border-blue-500 min-w-[300px]"
-            value={activeLesson}
-            onChange={(e) => {
-              setActiveLesson(Number(e.target.value));
-              setActiveStep(0);
-              setShowHint(false);
-              setShowBehindTheScenes(false);
-            }}
-          >
-            {lessons.map((l, i) => (
-              <option key={i} value={i}>{i + 1}. {l.title}</option>
-            ))}
-          </select>
-          <div className="flex gap-2">
-            <button 
-              disabled={activeLesson === 0}
-              onClick={() => {
-                setActiveLesson(l => l - 1);
-                setActiveStep(0);
-              }}
-              className="px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 disabled:hover:bg-gray-800 rounded transition"
-            >
-              &larr; Prev
-            </button>
-            <button 
-              disabled={activeLesson === lessons.length - 1}
-              onClick={() => {
-                setActiveLesson(l => l + 1);
-                setActiveStep(0);
-              }}
-              className="px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 disabled:hover:bg-gray-800 rounded transition"
-            >
-              Next &rarr;
-            </button>
-          </div>
-        </div>
-        <div className="text-sm text-gray-400 font-medium bg-gray-800/50 px-4 py-2 rounded-full">
-          Lesson {activeLesson + 1} / {lessons.length}
+  const formatServicePortDisplay = (ports: string | ServicePort[] | undefined) => {
+    if (!ports) return "80/TCP";
+    if (typeof ports === "string") return ports;
+    if (Array.isArray(ports)) {
+      return ports
+        .map((p) => `${p.port}${p.nodePort ? `:${p.nodePort}` : ""}/${p.protocol || "TCP"}`)
+        .join(", ");
+    }
+    return "80/TCP";
+  };
+
+  if (!currentLesson) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-[#070b14] text-white">
+        <div className="text-center">
+          <div className="text-4xl mb-3 animate-spin">☸</div>
+          <p className="text-slate-400">Loading Kubernetes Story Lab...</p>
         </div>
       </div>
+    );
+  }
 
-      {/* Main Content */}
-      <div className="flex flex-1 overflow-hidden">
-        
-        {/* Left Panel: Instructions & Terminal */}
-        <div className="w-1/2 flex flex-col border-r border-gray-800">
-          <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#0f1422]">
-            {/* Step Card */}
-            {step && (
-              <div className="bg-[#1a2335] rounded-lg p-6 border border-gray-700 shadow-xl">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-bold text-blue-400">Step {activeStep + 1}: {step.title || step.type}</h2>
-                  <span className="text-xs font-mono bg-blue-900/50 text-blue-300 px-3 py-1 rounded-full border border-blue-800/50">
-                    {activeStep + 1} / {lesson.steps.length}
-                  </span>
-                </div>
-                <div className="prose prose-invert max-w-none text-gray-300 mb-6 whitespace-pre-wrap">{step.description || step.prompt || step.text || ''}</div>
-                
-                <div className="flex gap-3 mb-4">
-                  {step.hint && (
-                    <button 
-                      onClick={() => setShowHint(!showHint)}
-                      className="text-sm px-4 py-2 bg-yellow-900/30 text-yellow-500 rounded hover:bg-yellow-900/50 transition border border-yellow-700/50"
-                    >
-                      💡 {showHint ? 'Hide Hint' : 'Show Hint'}
-                    </button>
-                  )}
-                </div>
-                
-                {showHint && step.hint && (
-                  <div className="p-4 bg-yellow-900/20 border border-yellow-700/30 rounded mb-4 text-yellow-200/80">
-                    {step.hint}
-                  </div>
-                )}
-              </div>
-            )}
+  const totalSteps = currentLesson.steps?.length || 1;
+  const progressPct = Math.round(((activeStepIdx + (stepCompleted ? 1 : 0)) / totalSteps) * 100);
 
-            {/* Behind the Scenes Panel */}
-            {step?.behindTheScenes && (
-              <div className="bg-[#161329] border border-[#2d224d] rounded-lg overflow-hidden shadow-lg">
-                <button 
-                  onClick={() => setShowBehindTheScenes(!showBehindTheScenes)}
-                  className="w-full flex justify-between items-center px-6 py-4 bg-[#1b1735] hover:bg-[#201b3d] transition-colors"
-                >
-                  <span className="font-semibold text-purple-300 flex items-center gap-2">
-                    🔧 Behind the Scenes
-                  </span>
-                  <span className="text-purple-400">{showBehindTheScenes ? '▲' : '▼'}</span>
-                </button>
-                {showBehindTheScenes && (
-                  <div className="p-6 border-t border-[#2d224d] bg-[#161329] text-purple-200">
-                    <div className="whitespace-pre-wrap font-sans text-sm mb-6 leading-relaxed">
-                      {step.behindTheScenes}
-                    </div>
-                    <div className="bg-black/50 p-4 rounded text-center text-xs font-mono text-purple-400 border border-purple-900/50 shadow-inner">
-                      kubectl &rarr; API Server &rarr; etcd &rarr; Scheduler &rarr; kubelet &rarr; CRI
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+  return (
+    <div className="flex h-screen w-screen flex-col bg-[#070b14] text-slate-100 font-sans select-none overflow-hidden">
+      {/* Top Header & Lesson Navigator */}
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-[#1b253b] bg-[#0c1220] px-6 z-20">
+        <div className="flex items-center space-x-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 font-bold text-white shadow-md shadow-blue-500/20">
+            ☸
           </div>
-
-          {/* Terminal */}
-          <div className="h-64 min-h-[16rem] bg-[#05080f] flex flex-col border-t border-gray-800 relative resize-y overflow-auto">
-            <div className="flex items-center justify-between px-4 py-2 bg-[#121826] border-b border-gray-800 text-xs font-mono text-gray-500 sticky top-0 z-10 shadow-md">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
-                <div className="w-3 h-3 rounded-full bg-yellow-500/80"></div>
-                <div className="w-3 h-3 rounded-full bg-green-500/80"></div>
-                <span className="ml-2">terminal</span>
-              </div>
-              <button 
-                onClick={() => { setTerminalOutput([]); setCurrentCommand(''); }}
-                className="hover:text-white transition px-2 py-1 hover:bg-gray-800 rounded"
-                title="Clear Terminal"
-              >
-                clear
-              </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-sm font-bold tracking-wide text-white">
+                Kubernetes Story Lab
+              </h1>
+              <span className="rounded bg-blue-900/60 px-2 py-0.5 text-[10px] font-mono font-semibold text-blue-300 border border-blue-700/50">
+                CKA Interactive
+              </span>
             </div>
-            
-            <div className="flex-1 p-4 font-mono text-sm overflow-y-auto" onClick={() => document.getElementById('term-input')?.focus()}>
-              {terminalOutput.map((item, i) => (
-                <div key={i} className="mb-2">
-                  {item.type === 'cmd' ? (
-                    <div className="flex text-gray-300">
-                      <span className="text-green-400 mr-2">$</span>
-                      {item.text}
-                    </div>
-                  ) : (
-                    <div className="text-gray-400 whitespace-pre-wrap pl-4 break-words">{item.text}</div>
-                  )}
-                </div>
-              ))}
-              <div className="flex text-gray-300 mt-2">
-                <span className="text-green-400 mr-2">$</span>
-                <input
-                  id="term-input"
-                  type="text"
-                  value={currentCommand}
-                  onChange={(e) => setCurrentCommand(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  className="flex-1 bg-transparent outline-none focus:ring-0 p-0 border-none w-full text-gray-200 placeholder-gray-700"
-                  autoFocus
-                  autoComplete="off"
-                  spellCheck="false"
-                />
-              </div>
-              <div ref={terminalEndRef} />
-            </div>
+            <p className="text-[11px] text-slate-400">
+              Interactive Lab & Cause-and-Effect Architecture Simulation
+            </p>
           </div>
         </div>
 
-        {/* Right Panel: Cluster State Visualizer */}
-        <div className="w-1/2 bg-[#0c121e] overflow-y-auto p-6 custom-scrollbar">
-          <h2 className="text-lg font-bold mb-6 text-gray-400 uppercase tracking-widest flex items-center gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)] animate-pulse"></span>
-            Cluster State
-          </h2>
+        {/* Lesson Selector Dropdown & Progress */}
+        <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-1.5 bg-[#141c2e] px-2 py-1 rounded-lg border border-[#22304d]">
+            <button
+              disabled={activeLessonIdx === 0}
+              onClick={() => setActiveLessonIdx((l) => l - 1)}
+              className="px-2 py-1 text-xs font-semibold rounded bg-[#1c2740] text-slate-300 hover:bg-[#28385c] disabled:opacity-40 transition-colors"
+              title="Previous Lesson"
+            >
+              ← Prev
+            </button>
 
-          <div className="space-y-6 pb-12">
-            
-            {/* Deployments */}
-            {clusterState?.deployments && clusterState.deployments.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-blue-400 flex items-center gap-2">
-                  <span className="text-lg">📦</span> Deployments
-                </h3>
-                <div className="grid gap-3">
-                  {clusterState.deployments.map((d, i) => (
-                    <div key={i} className="bg-blue-900/20 border border-blue-800/50 p-4 rounded-lg flex justify-between items-center shadow-sm">
-                      <div>
-                        <div className="font-mono text-blue-300 font-medium">{d.name}</div>
-                        <div className="text-xs text-blue-500/70 mt-1">{d.namespace || 'default'}</div>
-                      </div>
-                      <div className="text-right bg-blue-900/40 px-3 py-1 rounded-md border border-blue-800/50">
-                        <div className="text-sm text-blue-200">Replicas: <span className="font-bold">{d.available || d.upToDate || 0}/{d.replicas}</span></div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+            <select
+              value={activeLessonIdx}
+              onChange={(e) => setActiveLessonIdx(Number(e.target.value))}
+              className="bg-transparent text-xs font-semibold text-white px-2 py-1 outline-none cursor-pointer max-w-[280px] truncate"
+            >
+              {lessons.map((l, idx) => (
+                <option key={l.id || idx} value={idx} className="bg-[#0f172a] text-white">
+                  {idx + 1}. {l.title.replace(/^\d+\.\s*/, "")}
+                </option>
+              ))}
+            </select>
+
+            <button
+              disabled={activeLessonIdx === lessons.length - 1}
+              onClick={() => setActiveLessonIdx((l) => l + 1)}
+              className="px-2 py-1 text-xs font-semibold rounded bg-[#1c2740] text-slate-300 hover:bg-[#28385c] disabled:opacity-40 transition-colors"
+              title="Next Lesson"
+            >
+              Next →
+            </button>
+          </div>
+
+          <div className="hidden md:flex flex-col items-end">
+            <span className="text-[11px] text-slate-400 font-mono">
+              Lesson {activeLessonIdx + 1} / {lessons.length}
+            </span>
+            <div className="w-24 h-1.5 bg-slate-800 rounded-full overflow-hidden mt-0.5">
+              <div
+                className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                style={{
+                  width: `${((activeLessonIdx + 1) / lessons.length) * 100}%`,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Split Layout: Left (Story + Terminal) vs Right (Live Cluster Visualizer) */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* ================= LEFT SIDE: Story, Objectives & Terminal ================= */}
+        <div className="flex w-1/2 flex-col border-r border-[#1b253b] bg-[#090e1a] overflow-hidden">
+          {/* Upper Section: Lesson Story, Explanation & Step Card */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-5 thin-scroll">
+            {/* Lesson Title & Intro Banner */}
+            <div className="rounded-xl border border-[#202d47] bg-[#0e1628] p-5 shadow-lg">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-blue-400">
+                  Lesson {activeLessonIdx + 1} of {lessons.length}
+                </span>
+                <span className="text-[11px] font-mono text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded border border-slate-700/50">
+                  Progress: Step {activeStepIdx + 1} of {totalSteps} ({progressPct}%)
+                </span>
               </div>
-            )}
+              <h2 className="text-xl font-extrabold text-white tracking-tight">
+                {currentLesson.title}
+              </h2>
+              <p className="mt-2 text-xs text-slate-300 leading-relaxed whitespace-pre-line">
+                {currentLesson.intro}
+              </p>
+            </div>
 
-            {/* ReplicaSets */}
-            {clusterState?.replicaSets && clusterState.replicaSets.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-purple-400 flex items-center gap-2">
-                  <span className="text-lg">🔄</span> ReplicaSets
-                </h3>
-                <div className="grid gap-3">
-                  {clusterState.replicaSets.map((rs, i) => (
-                    <div key={i} className="bg-purple-900/20 border border-purple-800/50 p-4 rounded-lg flex justify-between items-center shadow-sm">
-                      <div className="font-mono text-purple-300 font-medium">{rs.name}</div>
-                      <div className="text-sm text-purple-200 bg-purple-900/40 px-3 py-1 rounded-md border border-purple-800/50">
-                        Replicas: <span className="font-bold">{rs.readyReplicas || 0}/{rs.desiredReplicas}</span>
-                      </div>
-                    </div>
-                  ))}
+            {/* Current Step Card */}
+            {currentStep && (
+              <div
+                className={`rounded-xl border p-5 shadow-xl transition-all ${
+                  stepCompleted
+                    ? "border-emerald-500/60 bg-emerald-950/20 shadow-emerald-950/30"
+                    : "border-blue-500/50 bg-[#121c32] shadow-blue-950/20"
+                }`}
+              >
+                {/* Step Header */}
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                        currentStep.type === "challenge"
+                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                          : currentStep.type === "observation"
+                          ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                          : currentStep.type === "explanation"
+                          ? "bg-blue-500/20 text-blue-300 border border-blue-500/40"
+                          : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                      }`}
+                    >
+                      {currentStep.type}
+                    </span>
+                    <h3 className="text-sm font-bold text-white">
+                      {currentStep.title || `Step ${activeStepIdx + 1}`}
+                    </h3>
+                  </div>
+
+                  {stepCompleted ? (
+                    <span className="flex items-center gap-1 text-xs font-bold text-emerald-400 animate-pulse">
+                      ✓ Mission Complete!
+                    </span>
+                  ) : (
+                    <span className="text-xs font-mono text-slate-400">
+                      Step {activeStepIdx + 1} / {totalSteps}
+                    </span>
+                  )}
                 </div>
-              </div>
-            )}
 
-            {/* StatefulSets */}
-            {clusterState?.statefulSets && clusterState.statefulSets.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-indigo-400 flex items-center gap-2">
-                  <span className="text-lg">💾</span> StatefulSets
-                </h3>
-                <div className="grid gap-3">
-                  {clusterState.statefulSets.map((ss, i) => (
-                    <div key={i} className="bg-indigo-900/20 border border-indigo-800/50 p-4 rounded-lg flex justify-between items-center shadow-sm">
-                      <div className="font-mono text-indigo-300 font-medium">{ss.name}</div>
-                      <div className="text-sm text-indigo-200 bg-indigo-900/40 px-3 py-1 rounded-md border border-indigo-800/50">
-                        Replicas: <span className="font-bold">{ss.readyReplicas || 0}/{ss.replicas}</span>
-                      </div>
-                    </div>
-                  ))}
+                {/* Step Body (Text / Description / Prompt) */}
+                <div className="text-xs text-slate-200 leading-relaxed whitespace-pre-line mb-4 font-sans">
+                  {currentStep.description || currentStep.text || currentStep.prompt}
                 </div>
-              </div>
-            )}
 
-            {/* DaemonSets */}
-            {clusterState?.daemonSets && clusterState.daemonSets.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-amber-400 flex items-center gap-2">
-                  <span className="text-lg">👻</span> DaemonSets
-                </h3>
-                <div className="grid gap-3">
-                  {clusterState.daemonSets.map((ds, i) => (
-                    <div key={i} className="bg-amber-900/20 border border-amber-800/50 p-4 rounded-lg flex justify-between items-center shadow-sm">
-                      <div className="font-mono text-amber-300 font-medium">{ds.name}</div>
-                      <div className="text-sm text-amber-200 bg-amber-900/40 px-3 py-1 rounded-md border border-amber-800/50">
-                        Ready: <span className="font-bold">{ds.readyPods || ds.currentPods || 0}/{ds.desiredNodes}</span>
+                {/* Actionable Prompt Banner for Challenges */}
+                {currentStep.type === "challenge" && currentStep.prompt && (
+                  <div className="mb-4 rounded-lg bg-black/40 p-3.5 border border-amber-500/30 flex items-start gap-2.5">
+                    <span className="text-amber-400 text-base">🎯</span>
+                    <div className="flex-1">
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                        Your Action Required:
                       </div>
+                      <p className="text-xs font-medium text-slate-100 mt-0.5">
+                        {currentStep.prompt}
+                      </p>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
+                  </div>
+                )}
 
-            {/* Jobs */}
-            {clusterState?.jobs && clusterState.jobs.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-teal-400 flex items-center gap-2">
-                  <span className="text-lg">🎯</span> Jobs
-                </h3>
-                <div className="grid gap-3">
-                  {clusterState.jobs.map((job, i) => (
-                    <div key={i} className="bg-teal-900/20 border border-teal-800/50 p-4 rounded-lg flex justify-between items-center shadow-sm">
-                      <div className="font-mono text-teal-300 font-medium">{job.name}</div>
-                      <div className="text-sm text-teal-200 bg-teal-900/40 px-3 py-1 rounded-md border border-teal-800/50">
-                        Status: <span className="font-bold">{job.status === 'Complete' || job.succeeded ? 'Complete' : 'Active'}</span> ({job.succeeded || 0}/{job.completions})
+                {/* Hint Bar & One-Click Run */}
+                {currentStep.hint && (
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between">
+                      <button
+                        onClick={() => setShowHint(!showHint)}
+                        className="text-[11px] font-semibold text-amber-400 hover:text-amber-300 flex items-center gap-1 transition-colors"
+                      >
+                        💡 {showHint ? "Hide Hint" : "Need a Hint?"}
+                      </button>
+                    </div>
+
+                    {showHint && (
+                      <div className="mt-2 rounded-lg bg-black/60 p-3 border border-amber-500/30 flex items-center justify-between gap-3">
+                        <code className="text-xs font-mono text-amber-200 break-all select-all">
+                          {currentStep.hint}
+                        </code>
+                        <button
+                          onClick={() => {
+                            setCurrentCommand(currentStep.hint || "");
+                            inputRef.current?.focus();
+                          }}
+                          className="shrink-0 rounded bg-amber-500/20 px-2.5 py-1 text-[10px] font-bold text-amber-300 hover:bg-amber-500/30 border border-amber-500/40 transition-all"
+                          title="Paste command into terminal"
+                        >
+                          📋 Paste
+                        </button>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+                    )}
+                  </div>
+                )}
 
-            {/* Pods */}
-            {clusterState?.pods && clusterState.pods.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-green-400 flex items-center gap-2">
-                  <span className="text-lg">🐋</span> Pods
-                </h3>
-                <div className="grid gap-3">
-                  {clusterState.pods.map((p, i) => (
-                    <div key={i} className="bg-green-900/20 border border-green-800/50 p-4 rounded-lg flex justify-between items-center shadow-sm">
-                      <div>
-                        <div className="font-mono text-green-300 font-medium flex items-center gap-2">
-                          <span className={`w-2.5 h-2.5 rounded-full ${p.status === 'Running' ? 'bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.8)]' : p.status === 'Pending' ? 'bg-yellow-500 shadow-[0_0_5px_rgba(234,179,8,0.8)]' : 'bg-red-500 shadow-[0_0_5px_rgba(239,68,68,0.8)]'}`}></span>
-                          {p.name}
+                {/* Behind the Scenes Collapsible Drawer */}
+                {currentStep.behindTheScenes && (
+                  <div className="rounded-lg border border-purple-900/50 bg-[#16122b] overflow-hidden mb-4">
+                    <button
+                      onClick={() => setShowBehindTheScenes(!showBehindTheScenes)}
+                      className="w-full flex items-center justify-between px-4 py-2.5 bg-purple-950/40 hover:bg-purple-950/70 text-xs font-bold text-purple-300 transition-colors"
+                    >
+                      <span className="flex items-center gap-2">
+                        🔧 Behind the Scenes: Component Architecture
+                      </span>
+                      <span>{showBehindTheScenes ? "▲" : "▼"}</span>
+                    </button>
+
+                    {showBehindTheScenes && (
+                      <div className="p-4 text-xs text-purple-200 border-t border-purple-900/50 space-y-3">
+                        <p className="whitespace-pre-line leading-relaxed font-sans">
+                          {currentStep.behindTheScenes}
+                        </p>
+                        <div className="rounded bg-black/60 p-2.5 text-[11px] font-mono text-purple-300 border border-purple-900/40 text-center">
+                          kubectl ➔ API Server ➔ etcd ➔ Scheduler ➔ kubelet ➔ CRI
                         </div>
                       </div>
-                      <div className="text-sm text-green-200 bg-green-900/40 px-3 py-1 rounded-md border border-green-800/50 font-medium">
-                        {p.status}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Continue Button for Non-Challenge Steps or Completed Steps */}
+                {(currentStep.type !== "challenge" || stepCompleted) && (
+                  <div className="flex justify-end pt-1">
+                    <button
+                      onClick={handleNextStep}
+                      className="rounded-lg bg-blue-600 hover:bg-blue-500 px-5 py-2 text-xs font-bold text-white shadow-lg shadow-blue-600/30 transition-all flex items-center gap-1.5"
+                    >
+                      {activeStepIdx === totalSteps - 1
+                        ? "Finish & Next Lesson →"
+                        : "Continue to Next Step →"}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
+          </div>
 
-            {/* Services */}
-            {clusterState?.services && clusterState.services.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-cyan-400 flex items-center gap-2">
-                  <span className="text-lg">🔌</span> Services
-                </h3>
-                <div className="grid gap-3">
+          {/* Lower Section: Integrated Interactive Terminal */}
+          <div
+            className="flex h-64 min-h-[16rem] flex-col border-t border-[#1b253b] bg-[#05080f] font-mono text-xs cursor-text relative select-text"
+            onClick={() => inputRef.current?.focus()}
+          >
+            {/* Terminal Title Bar */}
+            <div className="flex h-8 items-center justify-between bg-[#0e1526] px-4 border-b border-[#1b253b] select-none">
+              <div className="flex items-center space-x-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-red-500/80"></span>
+                <span className="h-2.5 w-2.5 rounded-full bg-amber-500/80"></span>
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/80"></span>
+                <span className="ml-2 text-[11px] font-semibold text-slate-300">
+                  terminal — simulated kubectl
+                </span>
+              </div>
+              <div className="flex items-center space-x-3 text-[11px]">
+                <span className="text-slate-500">History: ↑ / ↓</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setTerminalOutput([]);
+                    setCurrentCommand("");
+                  }}
+                  className="rounded bg-[#1a243a] px-2 py-0.5 text-slate-400 hover:text-white transition-colors"
+                  title="Clear Terminal Output"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            {/* Terminal Output Stream */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-1.5 thin-scroll">
+              {terminalOutput.map((item) => (
+                <div
+                  key={item.id}
+                  className={`whitespace-pre-wrap leading-relaxed ${
+                    item.type === "cmd"
+                      ? "text-sky-300 font-bold"
+                      : item.type === "success"
+                      ? "text-emerald-400 font-semibold"
+                      : item.type === "error"
+                      ? "text-rose-400 font-semibold"
+                      : item.type === "system"
+                      ? "text-amber-400 font-semibold"
+                      : "text-slate-300"
+                  }`}
+                >
+                  {item.text}
+                </div>
+              ))}
+              <div ref={terminalEndRef} />
+            </div>
+
+            {/* Terminal Input Prompt */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleCommandRun(currentCommand);
+              }}
+              className="flex items-center border-t border-[#1b253b] bg-[#090f1d] px-4 py-2"
+            >
+              <span className="text-emerald-400 font-bold mr-2 select-none">
+                learner@k8s:~$
+              </span>
+              <input
+                ref={inputRef}
+                type="text"
+                value={currentCommand}
+                onChange={(e) => setCurrentCommand(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Type a kubectl command (e.g. kubectl get pods)..."
+                autoFocus
+                autoComplete="off"
+                spellCheck="false"
+                className="flex-1 bg-transparent text-slate-100 outline-none placeholder:text-slate-600 font-mono text-xs"
+              />
+            </form>
+          </div>
+        </div>
+
+        {/* ================= RIGHT SIDE: Kubernetes Cluster Simulation ================= */}
+        <div className="flex w-1/2 flex-col bg-[#070b14] overflow-y-auto p-6 space-y-6 thin-scroll">
+          {/* Cluster Header & Component Flow Banner */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse" />
+                <h2 className="text-sm font-extrabold uppercase tracking-wider text-slate-200">
+                  Live Kubernetes Cluster
+                </h2>
+              </div>
+              <div className="flex items-center space-x-2 text-[11px] font-mono text-slate-400">
+                <span className="rounded bg-slate-800/80 px-2 py-0.5 border border-slate-700/60">
+                  Namespace: default
+                </span>
+                <span className="rounded bg-slate-800/80 px-2 py-0.5 border border-slate-700/60">
+                  Pods: {clusterState.pods.length}
+                </span>
+              </div>
+            </div>
+
+            {/* Live Component Activity Breadcrumb */}
+            {recentFlow && (
+              <div className="rounded-xl border border-blue-500/40 bg-blue-950/30 p-3.5 shadow-lg transition-all animate-fadeIn">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-blue-300 mb-1.5 flex items-center gap-1.5">
+                  <span className="animate-spin text-xs">☸</span> Active Component Flow:
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs mb-2">
+                  {recentFlow.flow.map((comp, i) => (
+                    <React.Fragment key={i}>
+                      <span className="rounded bg-blue-900/60 px-2 py-0.5 text-blue-200 border border-blue-700/60 font-semibold text-[11px]">
+                        {comp}
+                      </span>
+                      {i < recentFlow.flow.length - 1 && (
+                        <span className="text-blue-400 font-bold">➔</span>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </div>
+                <p className="text-[11px] text-slate-300 leading-snug">
+                  {recentFlow.description}
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* ================= 1. CONTROL PLANE (MASTER) ================= */}
+          <div className="rounded-xl border border-indigo-500/40 bg-gradient-to-b from-indigo-950/20 to-[#0c1224] p-5 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-indigo-500/20 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-base text-indigo-400">🧠</span>
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-200">
+                    Control Plane (Master Plane)
+                  </h3>
+                  <p className="text-[10px] text-indigo-400/80">
+                    Global State, Scheduling, & Workload Controllers
+                  </p>
+                </div>
+              </div>
+              <span className="text-[10px] font-mono text-indigo-300 bg-indigo-900/40 px-2 py-0.5 rounded border border-indigo-700/50">
+                Active
+              </span>
+            </div>
+
+            {/* Core Control Plane Components Grid */}
+            <div className="grid grid-cols-4 gap-2 text-center text-[10px] font-mono">
+              <div className="rounded bg-indigo-900/30 p-2 border border-indigo-800/40">
+                <div className="font-bold text-indigo-300">kube-apiserver</div>
+                <div className="text-[9px] text-slate-400 mt-0.5">REST API Gateway</div>
+              </div>
+              <div className="rounded bg-indigo-900/30 p-2 border border-indigo-800/40">
+                <div className="font-bold text-indigo-300">etcd</div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Key-Value Store</div>
+              </div>
+              <div className="rounded bg-indigo-900/30 p-2 border border-indigo-800/40">
+                <div className="font-bold text-indigo-300">kube-scheduler</div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Node Placement</div>
+              </div>
+              <div className="rounded bg-indigo-900/30 p-2 border border-indigo-800/40">
+                <div className="font-bold text-indigo-300">controller-mgr</div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Reconciliation</div>
+              </div>
+            </div>
+
+            {/* Control Plane Resources: Deployments, ReplicaSets, StatefulSets, DaemonSets, Jobs, ConfigMaps, Secrets */}
+            <div className="space-y-3 pt-2">
+              {/* Deployments */}
+              {clusterState.deployments.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-bold text-blue-400 flex items-center gap-1.5">
+                    <span>📦</span> Deployments ({clusterState.deployments.length})
+                  </div>
+                  <div className="grid gap-2">
+                    {clusterState.deployments.map((d, i) => (
+                      <div
+                        key={i}
+                        className="rounded-lg bg-blue-950/40 border border-blue-800/60 p-3 flex justify-between items-center shadow-md"
+                      >
+                        <div>
+                          <div className="font-mono text-xs font-bold text-blue-200">
+                            {d.name}
+                          </div>
+                          <div className="text-[10px] text-blue-400 font-mono mt-0.5">
+                            Image: {d.image} • Revision: {d.revision || 1}
+                          </div>
+                        </div>
+                        <div className="text-right bg-blue-900/50 px-2.5 py-1 rounded border border-blue-700/50">
+                          <span className="text-[11px] text-blue-200 font-mono font-bold">
+                            {d.available || d.upToDate || 0} / {d.replicas} Replicas
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ReplicaSets */}
+              {clusterState.replicaSets.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-bold text-purple-400 flex items-center gap-1.5">
+                    <span>🔄</span> ReplicaSets ({clusterState.replicaSets.length})
+                  </div>
+                  <div className="grid gap-2">
+                    {clusterState.replicaSets.map((rs, i) => (
+                      <div
+                        key={i}
+                        className={`rounded-lg border p-3 flex justify-between items-center transition-all ${
+                          rs.desiredReplicas === 0
+                            ? "bg-slate-900/40 border-slate-800 opacity-40"
+                            : "bg-purple-950/40 border-purple-800/60 shadow-md"
+                        }`}
+                      >
+                        <div>
+                          <div className="font-mono text-xs font-bold text-purple-200">
+                            {rs.name}
+                          </div>
+                          <div className="text-[10px] text-purple-400 font-mono mt-0.5">
+                            Image: {rs.image} {rs.ownerRef ? `• Owner: ${rs.ownerRef.name}` : ""}
+                          </div>
+                        </div>
+                        <div className="bg-purple-900/50 px-2.5 py-1 rounded border border-purple-700/50 font-mono text-[11px] text-purple-200 font-bold">
+                          {rs.readyReplicas || rs.currentReplicas || 0} / {rs.desiredReplicas} Pods
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* StatefulSets */}
+              {clusterState.statefulSets.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-bold text-indigo-400 flex items-center gap-1.5">
+                    <span>💾</span> StatefulSets ({clusterState.statefulSets.length})
+                  </div>
+                  <div className="grid gap-2">
+                    {clusterState.statefulSets.map((ss, i) => (
+                      <div
+                        key={i}
+                        className="rounded-lg bg-indigo-950/40 border border-indigo-800/60 p-3 flex justify-between items-center shadow-md"
+                      >
+                        <div>
+                          <div className="font-mono text-xs font-bold text-indigo-200">
+                            {ss.name}
+                          </div>
+                          <div className="text-[10px] text-indigo-400 font-mono mt-0.5">
+                            Image: {ss.image} • Service: {ss.serviceName || "headless"}
+                          </div>
+                        </div>
+                        <div className="bg-indigo-900/50 px-2.5 py-1 rounded border border-indigo-700/50 font-mono text-[11px] text-indigo-200 font-bold">
+                          {ss.readyReplicas || 0} / {ss.replicas} Replicas
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* DaemonSets */}
+              {clusterState.daemonSets.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-bold text-amber-400 flex items-center gap-1.5">
+                    <span>👻</span> DaemonSets ({clusterState.daemonSets.length})
+                  </div>
+                  <div className="grid gap-2">
+                    {clusterState.daemonSets.map((ds, i) => (
+                      <div
+                        key={i}
+                        className="rounded-lg bg-amber-950/40 border border-amber-800/60 p-3 flex justify-between items-center shadow-md"
+                      >
+                        <div>
+                          <div className="font-mono text-xs font-bold text-amber-200">
+                            {ds.name}
+                          </div>
+                          <div className="text-[10px] text-amber-400 font-mono mt-0.5">
+                            Image: {ds.image} • 1 pod per scheduled node
+                          </div>
+                        </div>
+                        <div className="bg-amber-900/50 px-2.5 py-1 rounded border border-amber-700/50 font-mono text-[11px] text-amber-200 font-bold">
+                          {ds.readyPods || ds.currentPods || 0} / {ds.desiredNodes} Nodes
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Jobs */}
+              {clusterState.jobs.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-bold text-teal-400 flex items-center gap-1.5">
+                    <span>🎯</span> Jobs ({clusterState.jobs.length})
+                  </div>
+                  <div className="grid gap-2">
+                    {clusterState.jobs.map((j, i) => (
+                      <div
+                        key={i}
+                        className="rounded-lg bg-teal-950/40 border border-teal-800/60 p-3 flex justify-between items-center shadow-md"
+                      >
+                        <div>
+                          <div className="font-mono text-xs font-bold text-teal-200">
+                            {j.name}
+                          </div>
+                          <div className="text-[10px] text-teal-400 font-mono mt-0.5">
+                            Image: {j.image} • Run to Completion
+                          </div>
+                        </div>
+                        <div className="bg-teal-900/50 px-2.5 py-1 rounded border border-teal-700/50 font-mono text-[11px] text-teal-200 font-bold">
+                          {j.succeeded || 0} / {j.completions} Succeeded
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ConfigMaps & Secrets Row */}
+              {(clusterState.configMaps.length > 0 || clusterState.secrets.length > 0) && (
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  {/* ConfigMaps */}
+                  {clusterState.configMaps.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
+                        <span>📄</span> ConfigMaps
+                      </div>
+                      {clusterState.configMaps.map((cm, i) => (
+                        <div
+                          key={i}
+                          className="rounded bg-emerald-950/30 border border-emerald-800/50 p-2 text-[11px] font-mono text-emerald-200"
+                        >
+                          <div className="font-bold truncate">{cm.name}</div>
+                          <div className="text-[9px] text-emerald-400">
+                            {Object.keys(cm.data || {}).length} keys stored
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Secrets */}
+                  {clusterState.secrets.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-[10px] font-bold text-rose-400 flex items-center gap-1">
+                        <span>🔐</span> Secrets
+                      </div>
+                      {clusterState.secrets.map((sec, i) => (
+                        <div
+                          key={i}
+                          className="rounded bg-rose-900/30 border border-rose-800/50 p-2 text-[11px] font-mono text-rose-200"
+                        >
+                          <div className="font-bold truncate">{sec.name}</div>
+                          <div className="text-[9px] text-rose-400">
+                            {sec.type} • {Object.keys(sec.data || {}).length || sec.dataKeys?.length || 0} keys
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ================= 2. DATA PLANE (WORKER NODES) ================= */}
+          <div className="rounded-xl border border-emerald-500/40 bg-gradient-to-b from-emerald-950/20 to-[#0c1224] p-5 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-emerald-500/20 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-base text-emerald-400">🖥️</span>
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-200">
+                    Data Plane (Worker Nodes)
+                  </h3>
+                  <p className="text-[10px] text-emerald-400/80">
+                    Host execution environments for application containers
+                  </p>
+                </div>
+              </div>
+              <span className="text-[10px] font-mono text-emerald-300 bg-emerald-900/40 px-2 py-0.5 rounded border border-emerald-700/50">
+                worker-node-1 (Ready)
+              </span>
+            </div>
+
+            {/* Node Daemon Agents */}
+            <div className="grid grid-cols-2 gap-2 text-center text-[10px] font-mono">
+              <div className="rounded bg-emerald-900/30 p-2 border border-emerald-800/40">
+                <div className="font-bold text-emerald-300">kubelet</div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Pod & Container Supervisor</div>
+              </div>
+              <div className="rounded bg-emerald-900/30 p-2 border border-emerald-800/40">
+                <div className="font-bold text-emerald-300">kube-proxy</div>
+                <div className="text-[9px] text-slate-400 mt-0.5">iptables / Service Routing</div>
+              </div>
+            </div>
+
+            {/* Services on Data Plane */}
+            {clusterState.services.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="text-[11px] font-bold text-cyan-400 flex items-center gap-1.5">
+                  <span>🔌</span> Active Services ({clusterState.services.length})
+                </div>
+                <div className="grid gap-2">
                   {clusterState.services.map((svc, i) => (
-                    <div key={i} className="bg-cyan-900/20 border border-cyan-800/50 p-4 rounded-lg flex justify-between items-center shadow-sm">
+                    <div
+                      key={i}
+                      className="rounded-lg bg-cyan-950/40 border border-cyan-800/60 p-3 flex justify-between items-center shadow-md font-mono"
+                    >
                       <div>
-                        <div className="font-mono text-cyan-300 font-medium">{svc.name}</div>
-                        <div className="text-xs text-cyan-500/80 mt-1 uppercase tracking-wider">{svc.type} &bull; {svc.clusterIP}</div>
+                        <div className="text-xs font-bold text-cyan-200">{svc.name}</div>
+                        <div className="text-[10px] text-cyan-400 mt-0.5">
+                          {svc.type} • ClusterIP: {svc.clusterIP}
+                        </div>
                       </div>
-                      <div className="text-sm text-cyan-200 bg-cyan-900/40 px-3 py-1 rounded-md border border-cyan-800/50">
-                        {typeof svc.ports === 'string' ? svc.ports : Array.isArray(svc.ports) ? (svc.ports as any[]).map((p: any) => `${p.port}:${p.nodePort || '-'}/${p.protocol || 'TCP'}`).join(', ') : '80/TCP'}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ConfigMaps */}
-            {clusterState?.configMaps && clusterState.configMaps.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
-                  <span className="text-lg">📄</span> ConfigMaps
-                </h3>
-                <div className="grid gap-3">
-                  {clusterState.configMaps.map((cm, i) => (
-                    <div key={i} className="bg-emerald-900/20 border border-emerald-800/50 p-4 rounded-lg flex justify-between items-center shadow-sm">
-                      <div className="font-mono text-emerald-300 font-medium">{cm.name}</div>
-                      <div className="text-sm text-emerald-200 bg-emerald-900/40 px-3 py-1 rounded-md border border-emerald-800/50">
-                        {Object.keys(cm.data || {}).length} keys
+                      <div className="bg-cyan-900/50 px-2.5 py-1 rounded border border-cyan-700/50 text-[11px] text-cyan-200 font-bold">
+                        {formatServicePortDisplay(svc.ports)}
                       </div>
                     </div>
                   ))}
@@ -452,54 +911,68 @@ export default function Lab({ lessons }: { lessons: Lesson[] }) {
               </div>
             )}
 
-            {/* Secrets */}
-            {clusterState?.secrets && clusterState.secrets.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-rose-400 flex items-center gap-2">
-                  <span className="text-lg">🔐</span> Secrets
-                </h3>
-                <div className="grid gap-3">
-                  {clusterState.secrets.map((sec, i) => (
-                    <div key={i} className="bg-rose-900/20 border border-rose-800/50 p-4 rounded-lg flex justify-between items-center shadow-sm">
-                      <div>
-                        <div className="font-mono text-rose-300 font-medium">{sec.name}</div>
-                        <div className="text-xs text-rose-500/80 mt-1 uppercase tracking-wider">{sec.type}</div>
+            {/* Pods Running in CRI Container Runtime */}
+            <div className="space-y-2">
+              <div className="text-[11px] font-bold text-emerald-400 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <span>🐋</span> containerd / CRI — Running Pods ({clusterState.pods.length})
+                </span>
+                <span className="text-[10px] font-mono text-slate-400">
+                  Shared Network & Storage
+                </span>
+              </div>
+
+              {clusterState.pods.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-800 p-6 text-center text-xs text-slate-500 font-mono">
+                  No Pods currently scheduled on this node.
+                  <br />
+                  <span className="text-blue-400">Run a kubectl command in the terminal to deploy!</span>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  {clusterState.pods.map((p, i) => (
+                    <div
+                      key={p.name || i}
+                      className="rounded-lg border border-emerald-500/40 bg-emerald-950/30 p-3 shadow-md hover:border-emerald-500/70 transition-all font-mono text-xs"
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span
+                            className={`h-2 w-2 rounded-full ${
+                              p.status === "Running"
+                                ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)] animate-pulse"
+                                : p.status === "Pending"
+                                ? "bg-amber-400 animate-ping"
+                                : "bg-rose-500"
+                            }`}
+                          />
+                          <span className="font-bold text-slate-100 truncate">{p.name}</span>
+                        </div>
+                        <span
+                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                            p.status === "Running"
+                              ? "bg-emerald-900/80 text-emerald-300"
+                              : "bg-amber-900/80 text-amber-300"
+                          }`}
+                        >
+                          {p.status}
+                        </span>
                       </div>
-                      <div className="text-sm text-rose-200 bg-rose-900/40 px-3 py-1 rounded-md border border-rose-800/50">
-                        {Object.keys(sec.data || {}).length || sec.dataKeys?.length || 0} keys
+
+                      <div className="text-[10px] text-slate-400 space-y-0.5">
+                        <div className="truncate">Image: {p.image}</div>
+                        <div>IP: {p.ip || "10.244.0.5"}</div>
+                        {p.ownerRef && (
+                          <div className="text-purple-300 truncate">
+                            Owner: {p.ownerRef.name}
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
-
-            {/* Namespaces */}
-            {clusterState?.namespaces && clusterState.namespaces.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-gray-400 flex items-center gap-2">
-                  <span className="text-lg">🏷️</span> Namespaces
-                </h3>
-                <div className="flex flex-wrap gap-2">
-                  {clusterState.namespaces.map((ns, i) => (
-                    <div key={i} className="bg-gray-800 border border-gray-700 px-3 py-1.5 rounded-md text-xs font-mono text-gray-300 flex items-center gap-2 shadow-sm">
-                      {ns.name}
-                      <span className={`w-2 h-2 rounded-full ${ns.status === 'Active' ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            
-            {/* Empty State */}
-            {Object.values(clusterState).every(v => !Array.isArray(v) || v.length === 0) && (
-              <div className="flex flex-col items-center justify-center p-12 text-gray-500 border-2 border-gray-800 border-dashed rounded-xl bg-[#111827]/50">
-                <span className="text-4xl mb-4 opacity-50">🛸</span>
-                <p className="text-lg font-medium">Cluster is empty</p>
-                <p className="text-sm mt-1 opacity-70">Run some commands to create resources</p>
-              </div>
-            )}
-
+              )}
+            </div>
           </div>
         </div>
       </div>

@@ -1,9 +1,9 @@
 id: 08-rollback
 title: "Rollbacks"
 intro: |
-  Oh no! The new image 'nginx:1.19' has a bug. 
-  Because Deployments keep the old ReplicaSets (scaled to 0), we can easily rollback to a previous version!
-
+  Disaster strikes! The new 'nginx:1.19' image contains a critical bug and our application is failing.
+  Because Deployments keep a history of old ReplicaSets (scaled down to 0 replicas), we have an immediate escape hatch: we can easily roll back to the previous known-good version.
+  
 initialState:
   deployments:
     - name: my-app
@@ -11,8 +11,10 @@ initialState:
       revision: 2
   replicaSets:
     - name: my-app-old
+      owner: my-app
       replicas: 0
     - name: my-app-new
+      owner: my-app
       replicas: 3
   pods:
     - name: my-app-new-a
@@ -23,32 +25,41 @@ initialState:
       owner: my-app-new
 
 steps:
+  - type: explanation
+    text: |
+      Every time a Deployment's pod template is modified, it generates a new revision. This revision history is simply the collection of old ReplicaSets associated with this Deployment.
+    behindTheScenes: |
+      The Deployment controller uses annotations (specifically `deployment.kubernetes.io/revision`) on the ReplicaSets to keep track of the chronological order of updates.
+
   - type: challenge
-    prompt: "Check the rollout history of your deployment to see the revisions."
+    prompt: "Check the rollout history of your deployment to see the available revisions."
     hint: "kubectl rollout history deployment/my-app"
     expected:
       verb: rollout
       resource: deployment
       name: my-app
     behindTheScenes: |
-      API Server retrieves the Deployment and its associated ReplicaSets.
-      Each ReplicaSet has an annotation (deployment.kubernetes.io/revision) that tracks the revision number.
+      The API Server queries etcd for all ReplicaSets owned by the `my-app` Deployment. The client formats and displays these based on their revision annotations.
 
   - type: explanation
-    text: "Note that revisions are only created when the Pod template changes (e.g., image or labels). Scaling a deployment does not create a new revision."
-    behindTheScenes: "The Deployment controller only generates a new pod-template-hash and new ReplicaSet if the template spec differs."
+    text: |
+      Scaling a deployment does NOT trigger a new revision—only changes to the pod template (like an image update or env var change) do. Let's hit the undo button.
+    behindTheScenes: |
+      Because scaling just changes the `replicas` field on the Deployment (and subsequently the active ReplicaSet) without altering the pod template, no new hash or ReplicaSet is needed.
 
   - type: challenge
-    prompt: "Undo the last rollout to revert back to the previous revision."
+    prompt: "Undo the last rollout to quickly revert back to the previous stable revision."
     hint: "kubectl rollout undo deployment/my-app"
     expected:
       verb: rollout
       resource: deployment
       name: my-app
     behindTheScenes: |
-      API Server updates the Deployment's pod template to match the old ReplicaSet's template.
-      Deployment controller bumps the revision number, and starts scaling UP the old ReplicaSet and scaling DOWN the new one.
+      When you issue an undo, the API Server updates the Deployment's pod template to match the template of the previous ReplicaSet (`my-app-old`).
+      The Deployment controller detects this template change. Instead of creating a new ReplicaSet, it sees that `my-app-old` already matches the desired template hash!
 
   - type: observation
-    text: "Your application is now back to its previous stable state!"
-    behindTheScenes: "The old ReplicaSet is now the active one (replicas: 3), and the buggy one is scaled to 0 but kept for history."
+    text: |
+      Your application has been safely restored!
+    behindTheScenes: |
+      The Deployment controller bumps the revision number of the `my-app-old` ReplicaSet to make it the latest, and immediately executes a rolling update in reverse: scaling UP `my-app-old` and scaling DOWN the buggy `my-app-new`.
