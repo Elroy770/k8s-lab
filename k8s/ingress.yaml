@@ -4,9 +4,14 @@ metadata:
   name: k8s-story-lab-ingress
   namespace: k8s-lab
   annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - k8s.elroy.site
+      secretName: k8s-story-lab-tls
   rules:
     - host: k8s.elroy.site
       http:

@@ -255,24 +255,24 @@ export default function Lab({ lessons }: LabProps) {
   const progressPct = Math.round(((activeStepIdx + (stepCompleted ? 1 : 0)) / totalSteps) * 100);
 
   return (
-    <div className="flex h-screen w-screen flex-col bg-[#070b14] text-slate-100 font-sans select-none overflow-hidden">
+    <div className="lab-shell flex h-screen w-screen flex-col text-slate-100 font-sans select-none overflow-hidden">
       {/* Top Header & Lesson Navigator */}
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-[#1b253b] bg-[#0c1220] px-6 z-20">
+      <header className="lab-header flex shrink-0 items-center justify-between border-b z-20">
         <div className="flex items-center space-x-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 font-bold text-white shadow-md shadow-blue-500/20">
-            ☸
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 font-bold text-white shadow-lg shadow-blue-500/25">
+            K
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-sm font-bold tracking-wide text-white">
-                Kubernetes Story Lab
+                k8s labs
               </h1>
               <span className="rounded bg-blue-900/60 px-2 py-0.5 text-[10px] font-mono font-semibold text-blue-300 border border-blue-700/50">
-                CKA Interactive
+                SIMULATOR
               </span>
             </div>
             <p className="text-[11px] text-slate-400">
-              Interactive Lab & Cause-and-Effect Architecture Simulation
+              Run commands. Watch Kubernetes reconcile.
             </p>
           </div>
         </div>
@@ -328,13 +328,20 @@ export default function Lab({ lessons }: LabProps) {
       </header>
 
       {/* Main Split Layout: Left (Story + Terminal) vs Right (Live Cluster Visualizer) */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="lab-main flex flex-1 overflow-hidden">
         {/* ================= LEFT SIDE: Story, Objectives & Terminal ================= */}
-        <div className="flex w-1/2 flex-col border-r border-[#1b253b] bg-[#090e1a] overflow-hidden">
+        <div className="lab-lesson-pane flex flex-col border-r overflow-hidden">
           {/* Upper Section: Lesson Story, Explanation & Step Card */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-5 thin-scroll">
+          <div className="lab-lesson-scroll flex-1 overflow-y-auto space-y-5 thin-scroll">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-blue-400">Guided workspace</div>
+                <h2 className="mt-1 text-lg font-bold tracking-tight text-slate-100">Lesson process</h2>
+              </div>
+              <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-[10px] font-semibold text-blue-300">Learn → run → observe</span>
+            </div>
             {/* Lesson Title & Intro Banner */}
-            <div className="rounded-xl border border-[#202d47] bg-[#0e1628] p-5 shadow-lg">
+            <div className="lab-card rounded-xl border p-5 shadow-lg">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-blue-400">
                   Lesson {activeLessonIdx + 1} of {lessons.length}
@@ -354,7 +361,7 @@ export default function Lab({ lessons }: LabProps) {
             {/* Current Step Card */}
             {currentStep && (
               <div
-                className={`rounded-xl border p-5 shadow-xl transition-all ${
+                className={`lab-step-card rounded-xl border p-5 shadow-xl transition-all ${
                   stepCompleted
                     ? "border-emerald-500/60 bg-emerald-950/20 shadow-emerald-950/30"
                     : "border-blue-500/50 bg-[#121c32] shadow-blue-950/20"
@@ -489,11 +496,11 @@ export default function Lab({ lessons }: LabProps) {
 
           {/* Lower Section: Integrated Interactive Terminal */}
           <div
-            className="flex h-64 min-h-[16rem] flex-col border-t border-[#1b253b] bg-[#05080f] font-mono text-xs cursor-text relative select-text"
+            className="lab-terminal flex flex-col border-t font-mono text-xs cursor-text relative select-text"
             onClick={() => inputRef.current?.focus()}
           >
             {/* Terminal Title Bar */}
-            <div className="flex h-8 items-center justify-between bg-[#0e1526] px-4 border-b border-[#1b253b] select-none">
+            <div className="lab-terminal-bar flex items-center justify-between px-4 border-b select-none">
               <div className="flex items-center space-x-2">
                 <span className="h-2.5 w-2.5 rounded-full bg-red-500/80"></span>
                 <span className="h-2.5 w-2.5 rounded-full bg-amber-500/80"></span>
@@ -569,15 +576,16 @@ export default function Lab({ lessons }: LabProps) {
         </div>
 
         {/* ================= RIGHT SIDE: Kubernetes Cluster Simulation ================= */}
-        <div className="flex w-1/2 flex-col bg-[#070b14] overflow-y-auto p-6 space-y-6 thin-scroll">
+        <div className="lab-simulation-pane flex flex-col overflow-y-auto space-y-6 thin-scroll">
           {/* Cluster Header & Component Flow Banner */}
           <div>
-            <div className="flex items-center justify-between mb-3">
+            <div className="lab-sim-header flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse" />
-                <h2 className="text-sm font-extrabold uppercase tracking-wider text-slate-200">
-                  Live Kubernetes Cluster
-                </h2>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-blue-400">Workspace / simulation</div>
+                  <h2 className="mt-1 text-lg font-bold tracking-tight text-slate-100">Kubernetes processes</h2>
+                </div>
               </div>
               <div className="flex items-center space-x-2 text-[11px] font-mono text-slate-400">
                 <span className="rounded bg-slate-800/80 px-2 py-0.5 border border-slate-700/60">
@@ -615,7 +623,7 @@ export default function Lab({ lessons }: LabProps) {
           </div>
 
           {/* ================= 1. CONTROL PLANE (MASTER) ================= */}
-          <div className="rounded-xl border border-indigo-500/40 bg-gradient-to-b from-indigo-950/20 to-[#0c1224] p-5 shadow-xl space-y-4">
+          <div className="lab-section rounded-xl border p-5 shadow-xl space-y-4">
             <div className="flex items-center justify-between border-b border-indigo-500/20 pb-3">
               <div className="flex items-center gap-2">
                 <span className="text-base text-indigo-400">🧠</span>
@@ -854,7 +862,7 @@ export default function Lab({ lessons }: LabProps) {
           </div>
 
           {/* ================= 2. DATA PLANE (WORKER NODES) ================= */}
-          <div className="rounded-xl border border-emerald-500/40 bg-gradient-to-b from-emerald-950/20 to-[#0c1224] p-5 shadow-xl space-y-4">
+          <div className="lab-section rounded-xl border p-5 shadow-xl space-y-4">
             <div className="flex items-center justify-between border-b border-emerald-500/20 pb-3">
               <div className="flex items-center gap-2">
                 <span className="text-base text-emerald-400">🖥️</span>

@@ -268,6 +268,43 @@ const DEFAULT_LESSONS: Lesson[] = [
   },
 ];
 
+function normalizeLesson(data: Lesson): Lesson {
+  if (!data.initialState) return data;
+
+  const state = data.initialState;
+  return {
+    ...data,
+    initialState: {
+      ...state,
+      replicaSets: (state.replicaSets || []).map((raw) => {
+        const rs = raw as typeof raw & { replicas?: number };
+        const replicas = rs.desiredReplicas ?? rs.replicas ?? 0;
+        return {
+          ...rs,
+          desiredReplicas: replicas,
+          currentReplicas: rs.currentReplicas ?? replicas,
+          readyReplicas: rs.readyReplicas ?? replicas,
+          image: rs.image || "nginx:latest",
+          age: rs.age || "now",
+        };
+      }),
+      pods: (state.pods || []).map((raw) => {
+        const pod = raw as typeof raw & { owner?: string };
+        return {
+          ...pod,
+          image: pod.image || "nginx:latest",
+          status: pod.status || "Running",
+          node: pod.node || "worker-node-1",
+          ip: pod.ip || "10.244.0.5",
+          restarts: pod.restarts ?? 0,
+          age: pod.age || "now",
+          ownerRef: pod.ownerRef || (pod.owner ? { kind: "ReplicaSet", name: pod.owner } : undefined),
+        };
+      }),
+    },
+  };
+}
+
 export async function loadLessons(): Promise<Lesson[]> {
   const possiblePaths = [
     path.join(process.cwd(), "lessons"),
@@ -287,7 +324,7 @@ export async function loadLessons(): Promise<Lesson[]> {
             const raw = fs.readFileSync(/*turbopackIgnore: true*/ filePath, "utf-8");
             const data = (typeof YAML?.parse === "function" ? YAML.parse(raw) : (YAML as any)(raw)) as Lesson;
             if (data && data.title && data.steps) {
-              loaded.push(data);
+              loaded.push(normalizeLesson(data));
             }
           }
           if (loaded.length > 0) {

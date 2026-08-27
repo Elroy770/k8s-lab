@@ -45,6 +45,12 @@ function getServicePortInfo(ports: string | ServicePort[] | undefined): { portNu
   return { portNum: "80", targetPort: "80" };
 }
 
+// Lesson YAML is intentionally forgiving. Keep incomplete teaching fixtures
+// renderable instead of crashing the terminal formatter on undefined fields.
+function cell(value: unknown, width: number, fallback = "-"): string {
+  return String(value ?? fallback).padEnd(width);
+}
+
 export function executeCommand(
   input: string,
   state: ClusterState,
@@ -136,7 +142,7 @@ export function executeCommand(
         if (!p) {
           output = `Error from server (NotFound): pods "${name}" not found`;
         } else {
-          output = `NAME         READY   STATUS    RESTARTS   AGE\n${p.name.padEnd(12)} 1/1     ${p.status.padEnd(9)} ${String(p.restarts).padEnd(10)} ${p.age}`;
+          output = `NAME         READY   STATUS    RESTARTS   AGE\n${cell(p.name, 12)} 1/1     ${cell(p.status, 9, "Running")} ${cell(p.restarts, 10, "0")} ${p.age || "-"}`;
         }
       } else {
         if (nextState.pods.length === 0) {
@@ -144,7 +150,7 @@ export function executeCommand(
         } else {
           const header = `NAME                        READY   STATUS    RESTARTS   AGE`;
           const rows = nextState.pods.map(
-            (p) => `${p.name.padEnd(27)} 1/1     ${p.status.padEnd(9)} ${String(p.restarts).padEnd(10)} ${p.age}`
+            (p) => `${cell(p.name, 27)} 1/1     ${cell(p.status, 9, "Running")} ${cell(p.restarts, 10, "0")} ${p.age || "-"}`
           );
           output = [header, ...rows].join("\n");
         }
@@ -155,7 +161,7 @@ export function executeCommand(
       } else {
         const header = `NAME                   DESIRED   CURRENT   READY   AGE`;
         const rows = nextState.replicaSets.map(
-          (rs) => `${rs.name.padEnd(22)} ${String(rs.desiredReplicas).padEnd(9)} ${String(rs.currentReplicas).padEnd(9)} ${String(rs.readyReplicas).padEnd(7)} ${rs.age}`
+          (rs) => `${cell(rs.name, 22)} ${cell(rs.desiredReplicas ?? rs.replicas, 9, "0")} ${cell(rs.currentReplicas ?? rs.replicas, 9, "0")} ${cell(rs.readyReplicas ?? rs.replicas, 7, "0")} ${rs.age || "-"}`
         );
         output = [header, ...rows].join("\n");
       }
@@ -165,7 +171,7 @@ export function executeCommand(
       } else {
         const header = `NAME         READY   UP-TO-DATE   AVAILABLE   AGE`;
         const rows = nextState.deployments.map(
-          (d) => `${d.name.padEnd(12)} ${d.available}/${d.replicas}     ${String(d.upToDate).padEnd(12)} ${String(d.available).padEnd(11)} ${d.age}`
+          (d) => `${cell(d.name, 12)} ${d.available ?? 0}/${d.replicas ?? 0}     ${cell(d.upToDate, 12, "0")} ${cell(d.available, 11, "0")} ${d.age || "-"}`
         );
         output = [header, ...rows].join("\n");
       }
@@ -175,7 +181,7 @@ export function executeCommand(
       } else {
         const header = `NAME                   DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR   AGE`;
         const rows = nextState.daemonSets.map(
-          (ds) => `${ds.name.padEnd(22)} ${String(ds.desiredNodes).padEnd(9)} ${String(ds.currentPods).padEnd(9)} ${String(ds.readyPods).padEnd(7)} ${String(ds.currentPods).padEnd(12)} ${String(ds.readyPods).padEnd(11)} <none>          ${ds.age}`
+          (ds) => `${cell(ds.name, 22)} ${cell(ds.desiredNodes, 9, "0")} ${cell(ds.currentPods, 9, "0")} ${cell(ds.readyPods, 7, "0")} ${cell(ds.currentPods, 12, "0")} ${cell(ds.readyPods, 11, "0")} <none>          ${ds.age || "-"}`
         );
         output = [header, ...rows].join("\n");
       }
@@ -185,7 +191,7 @@ export function executeCommand(
       } else {
         const header = `NAME         READY   AGE`;
         const rows = nextState.statefulSets.map(
-          (sts) => `${sts.name.padEnd(12)} ${sts.readyReplicas}/${sts.replicas}     ${sts.age}`
+          (sts) => `${cell(sts.name, 12)} ${sts.readyReplicas ?? 0}/${sts.replicas ?? 0}     ${sts.age || "-"}`
         );
         output = [header, ...rows].join("\n");
       }
@@ -195,7 +201,7 @@ export function executeCommand(
       } else {
         const header = `NAME         COMPLETIONS   DURATION   AGE`;
         const rows = nextState.jobs.map(
-          (job) => `${job.name.padEnd(12)} ${job.succeeded}/${job.completions}           12s        ${job.age}`
+          (job) => `${cell(job.name, 12)} ${job.succeeded ?? 0}/${job.completions ?? 0}           12s        ${job.age || "-"}`
         );
         output = [header, ...rows].join("\n");
       }
@@ -205,7 +211,7 @@ export function executeCommand(
       } else {
         const header = `NAME         SCHEDULE      SUSPEND   ACTIVE   LAST SCHEDULE   AGE`;
         const rows = nextState.cronJobs.map(
-          (cj) => `${cj.name.padEnd(12)} ${cj.schedule.padEnd(13)} False     ${String(cj.active).padEnd(8)} ${cj.lastSchedule.padEnd(15)} ${cj.age}`
+          (cj) => `${cell(cj.name, 12)} ${cell(cj.schedule, 13)} False     ${cell(cj.active, 8, "0")} ${cell(cj.lastSchedule, 15)} ${cj.age || "-"}`
         );
         output = [header, ...rows].join("\n");
       }
@@ -215,7 +221,7 @@ export function executeCommand(
       } else {
         const header = `NAME         TYPE           CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE`;
         const rows = nextState.services.map(
-          (svc) => `${svc.name.padEnd(12)} ${svc.type.padEnd(14)} ${svc.clusterIP.padEnd(15)} ${svc.externalIP || "<none>        "} ${formatServicePorts(svc.ports).padEnd(9)} ${svc.age}`
+          (svc) => `${cell(svc.name, 12)} ${cell(svc.type, 14)} ${cell(svc.clusterIP, 15)} ${svc.externalIP || "<none>        "} ${cell(formatServicePorts(svc.ports), 9)} ${svc.age || "-"}`
         );
         output = [header, ...rows].join("\n");
       }
@@ -225,7 +231,7 @@ export function executeCommand(
       } else {
         const header = `NAME              STATUS   AGE`;
         const rows = nextState.namespaces.map(
-          (ns) => `${ns.name.padEnd(17)} ${ns.status.padEnd(8)} ${ns.age}`
+          (ns) => `${cell(ns.name, 17)} ${cell(ns.status, 8, "Active")} ${ns.age || "-"}`
         );
         output = [header, ...rows].join("\n");
       }
@@ -235,7 +241,7 @@ export function executeCommand(
       } else {
         const header = `NAME         DATA   AGE`;
         const rows = nextState.configMaps.map(
-          (cm) => `${cm.name.padEnd(12)} ${String(Object.keys(cm.data || {}).length).padEnd(6)} ${cm.age}`
+          (cm) => `${cell(cm.name, 12)} ${cell(Object.keys(cm.data || {}).length, 6, "0")} ${cm.age || "-"}`
         );
         output = [header, ...rows].join("\n");
       }
@@ -245,7 +251,7 @@ export function executeCommand(
       } else {
         const header = `NAME         TYPE                                  DATA   AGE`;
         const rows = nextState.secrets.map(
-          (sec) => `${sec.name.padEnd(12)} ${sec.type.padEnd(37)} ${String((sec.dataKeys || []).length).padEnd(6)} ${sec.age}`
+          (sec) => `${cell(sec.name, 12)} ${cell(sec.type, 37)} ${cell((sec.dataKeys || Object.keys(sec.data || {})).length, 6, "0")} ${sec.age || "-"}`
         );
         output = [header, ...rows].join("\n");
       }
