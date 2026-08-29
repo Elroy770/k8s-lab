@@ -3,45 +3,45 @@ title: "Pod Lifecycle"
 intro: |
   Pods in Kubernetes are intentionally designed to be ephemeral and disposable. 
   If a standalone Pod crashes, is evicted, or gets manually deleted, Kubernetes does not automatically recreate it. 
-  Let's observe the lifecycle of a standalone Pod and see what happens when it is terminated.
+  Let's observe the lifecycle of a standalone Pod on worker-node-1 and see what happens when it is terminated.
 initialState:
   pods:
     - name: web
-      image: nginx
+      image: nginx:latest
+      node: worker-node-1
+      ip: 10.244.1.15
       status: Running
 steps:
-  - title: "Observe the Running Pod"
+  - title: "Observe the Running Pod Across Nodes"
     type: observation
-    text: "Notice that we already have a standalone pod named 'web' running in the cluster."
+    text: "Notice that we already have a standalone pod named 'web' running on worker-node-1 in the cluster. You can run `kubectl get pods -o wide` to inspect its node placement and IP."
     behindTheScenes: |
       - kube-apiserver: Exposes the current "Running" state.
-      - etcd: Holds the persistent record that the 'web' Pod exists and is assigned to a node.
-      - kubelet: Actively monitors the container on the worker node.
+      - etcd: Holds the persistent record that the 'web' Pod exists and is assigned to worker-node-1.
+      - kubelet: Actively monitors the container on worker-node-1.
       - CRI: Keeps the nginx container process alive and running.
       - kube-proxy: Ensures network routes to the Pod are maintained.
-      - kube-scheduler & kube-controller-manager: Idle regarding this specific Pod, as it's already scheduled and not managed by a controller.
 
   - title: "Delete the Pod"
     type: challenge
-    prompt: "Delete the standalone 'web' pod to simulate a failure or removal."
-    hint: "Use the `kubectl delete` command: `kubectl delete pod web`"
+    prompt: "Delete the standalone 'web' pod to simulate a node failure, container crash, or accidental deletion."
+    hint: "kubectl delete pod web (or: kubectl delete -f pod.yaml)"
     expected:
       verb: delete
       resource: pod
       name: web
     behindTheScenes: |
-      - kube-apiserver: Receives the DELETE request and updates the Pod object with a deletion timestamp (graceful termination).
+      - kube-apiserver: Receives the DELETE request and updates the Pod object with a deletion timestamp.
       - etcd: Saves the updated state with the deletion timestamp.
       - kubelet: Detects the deletion timestamp via its watch on the API server and initiates the shutdown sequence.
-      - CRI: Instructed by the kubelet, it sends a SIGTERM signal to the nginx process. Once the process stops, the container is destroyed.
-      - kube-proxy: Removes the networking rules associated with the Pod's IP address.
-      - kube-apiserver & etcd: Once the kubelet confirms the container is fully terminated, the API server removes the Pod object from etcd completely.
-      - kube-scheduler & kube-controller-manager: Observe the deletion but take no action, as this Pod lacks a managing controller.
+      - CRI: Instructed by the kubelet, it sends a SIGTERM signal to the nginx process and destroys the container.
+      - kube-proxy: Removes local routing rules associated with the Pod's IP address.
+      - kube-apiserver & etcd: Removes the Pod object from etcd completely.
 
   - title: "Verify Pod Removal"
     type: challenge
     prompt: "List the pods to verify that the 'web' pod has been completely removed from the cluster."
-    hint: "Use the `kubectl get` command: `kubectl get pods`"
+    hint: "kubectl get pods"
     expected:
       verb: get
       resource: pod
@@ -49,15 +49,14 @@ steps:
       - kube-apiserver: Receives the GET request for pods.
       - etcd: Returns an empty result set, confirming the record is gone.
       - kubelet & CRI: Have fully cleaned up the resources on the worker node.
-      - kube-scheduler, kube-controller-manager, kube-proxy: Remain synced with the new, empty state.
 
   - title: "Understand the Limitation"
     type: explanation
     text: |
       The pod is permanently gone! Because it was a standalone Pod, it had no self-healing capabilities.
-      To guarantee that our applications remain highly available even when individual Pods fail, we must wrap them in a higher-level Controller, such as a ReplicaSet or Deployment.
+      To guarantee that our applications remain highly available even when individual Pods or worker nodes fail, we must wrap them in a higher-level Controller, such as a ReplicaSet or Deployment.
     behindTheScenes: |
-      - kube-controller-manager: This component houses various controllers. Because we did not use a ReplicaSet or Deployment, no control loop was watching to replace the deleted Pod. The rest of the cluster (API server, etcd, scheduler, kubelet, CRI, proxy) simply executed the deletion as instructed.
+      - kube-controller-manager: This component houses various controllers. Because we did not use a ReplicaSet or Deployment, no control loop was watching to replace the deleted Pod.
 
   - title: "Transition to Controllers"
     type: transition

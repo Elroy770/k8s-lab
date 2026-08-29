@@ -2,32 +2,44 @@ id: 08-rollback
 title: "Rollbacks"
 intro: |
   Disaster strikes! The new 'nginx:1.19' image contains a critical bug and our application is failing.
-  Because Deployments keep a history of old ReplicaSets (scaled down to 0 replicas), we have an immediate escape hatch: we can easily roll back to the previous known-good version.
+  Because Deployments keep a history of old ReplicaSets (scaled down to 0 replicas), we have an immediate escape hatch: we can easily roll back to the previous known-good version with zero downtime.
   
 initialState:
   deployments:
     - name: my-app
       replicas: 3
+      image: nginx:1.19
       revision: 2
   replicaSets:
-    - name: my-app-old
+    - name: my-app-v1
       owner: my-app
+      image: nginx:latest
       replicas: 0
-    - name: my-app-new
+    - name: my-app-v2
       owner: my-app
+      image: nginx:1.19
       replicas: 3
   pods:
-    - name: my-app-new-a
-      owner: my-app-new
-    - name: my-app-new-b
-      owner: my-app-new
-    - name: my-app-new-c
-      owner: my-app-new
+    - name: my-app-v2-a
+      image: nginx:1.19
+      node: worker-node-1
+      ip: 10.244.1.51
+      owner: my-app-v2
+    - name: my-app-v2-b
+      image: nginx:1.19
+      node: worker-node-2
+      ip: 10.244.2.52
+      owner: my-app-v2
+    - name: my-app-v2-c
+      image: nginx:1.19
+      node: worker-node-1
+      ip: 10.244.1.53
+      owner: my-app-v2
 
 steps:
   - type: explanation
     text: |
-      Every time a Deployment's pod template is modified, it generates a new revision. This revision history is simply the collection of old ReplicaSets associated with this Deployment.
+      Every time a Deployment's pod template is modified, it generates a new revision. This revision history is simply the collection of old ReplicaSets associated with this Deployment stored in etcd.
     behindTheScenes: |
       The Deployment controller uses annotations (specifically `deployment.kubernetes.io/revision`) on the ReplicaSets to keep track of the chronological order of updates.
 
@@ -45,7 +57,7 @@ steps:
     text: |
       Scaling a deployment does NOT trigger a new revision—only changes to the pod template (like an image update or env var change) do. Let's hit the undo button.
     behindTheScenes: |
-      Because scaling just changes the `replicas` field on the Deployment (and subsequently the active ReplicaSet) without altering the pod template, no new hash or ReplicaSet is needed.
+      Because scaling just changes the `replicas` field on the Deployment without altering the pod template, no new hash or ReplicaSet is needed.
 
   - type: challenge
     prompt: "Undo the last rollout to quickly revert back to the previous stable revision."
@@ -55,11 +67,11 @@ steps:
       resource: deployment
       name: my-app
     behindTheScenes: |
-      When you issue an undo, the API Server updates the Deployment's pod template to match the template of the previous ReplicaSet (`my-app-old`).
-      The Deployment controller detects this template change. Instead of creating a new ReplicaSet, it sees that `my-app-old` already matches the desired template hash!
+      When you issue an undo, the API Server updates the Deployment's pod template to match the previous ReplicaSet (`my-app-v1`).
+      The Deployment controller instantly scales up the old stable ReplicaSet and scales down the buggy one.
 
   - type: observation
     text: |
-      Your application has been safely restored!
+      Your application has been safely restored! Check your pods with `kubectl get pods -o wide` to see the stable v1 pods running healthy across your worker nodes.
     behindTheScenes: |
-      The Deployment controller bumps the revision number of the `my-app-old` ReplicaSet to make it the latest, and immediately executes a rolling update in reverse: scaling UP `my-app-old` and scaling DOWN the buggy `my-app-new`.
+      The Deployment controller bumped the revision number of the `my-app-v1` ReplicaSet to make it the latest, and immediately executed a rolling update in reverse.

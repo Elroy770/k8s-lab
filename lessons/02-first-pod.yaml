@@ -3,56 +3,51 @@ title: "Your First Pod"
 intro: |
   In Kubernetes, the smallest and simplest deployable object is a Pod. 
   A Pod represents a single instance of a running process in your cluster, wrapping one or more tightly coupled containers.
-  Let's get our hands dirty and create your very first Pod!
+  You can create Pods imperatively via the CLI (`kubectl run`) or declaratively using YAML manifests (`kubectl apply -f pod.yaml`).
+  Let's get our hands dirty and deploy your very first Pod!
 steps:
-  - title: "Create the Pod"
+  - title: "Create the Pod (Imperative or Declarative)"
     type: challenge
-    prompt: "Create a pod named 'web' using the 'nginx' container image."
-    hint: "Use the `kubectl run` command: `kubectl run web --image=nginx`"
+    prompt: "Create a pod named 'web' using the 'nginx' container image. You can use imperative `kubectl run` or apply declarative YAML (`kubectl apply -f pod.yaml` / `vim pod.yaml`)."
+    hint: "kubectl run web --image=nginx (or: kubectl apply -f pod.yaml)"
     expected:
       verb: run
       resource: pod
       name: web
     behindTheScenes: |
-      - kube-apiserver: Receives your POST request, authenticates it, and validates the Pod specification.
+      - kube-apiserver: Receives your request, authenticates RBAC, and validates the Pod specification.
       - etcd: The API server persists the new Pod object as "Pending" in etcd.
-      - kube-scheduler: Detects the new Pod without a node assignment, evaluates available nodes, selects the best fit, and binds the Pod to that node via the API server.
-      - kube-controller-manager: While not directly managing this standalone Pod, it observes the cluster state changes.
-      - kubelet: The kubelet on the assigned node sees the new binding, reads the Pod spec, and begins the creation process.
-      - CRI: The kubelet instructs the Container Runtime Interface (CRI) to pull the 'nginx' image and start the container process.
-      - kube-proxy: Updates local iptables rules if any networking changes are required for the new Pod.
+      - kube-scheduler: Evaluates available worker nodes (worker-node-1 and worker-node-2), scores resource capacity, and binds the Pod to a node.
+      - kubelet: The kubelet on the assigned node reads the PodSpec from the API server watch stream.
+      - CRI: Instructed by kubelet, containerd pulls the 'nginx' image and creates the container process inside dedicated Linux namespaces.
 
-  - title: "Verify Pod Creation"
+  - title: "Verify Pod Creation & Node Placement"
     type: challenge
-    prompt: "List the pods in your default namespace to confirm that your 'web' pod is up and running."
-    hint: "Use the `kubectl get` command: `kubectl get pods`"
+    prompt: "List the pods in your default namespace to confirm that 'web' is Running. Use `-o wide` to discover which worker node the scheduler assigned it to."
+    hint: "kubectl get pods -o wide (or: kubectl get pods)"
     expected:
       verb: get
       resource: pod
     behindTheScenes: |
-      - kube-apiserver: Receives your GET request and queries the data store.
-      - etcd: Quickly retrieves the latest state of all Pods in the namespace.
-      - kubelet: Has continuously been updating the API server with the running status of the 'web' Pod.
-      - kube-scheduler, kube-controller-manager, kube-proxy, CRI: These components are quietly maintaining the running state but are not actively involved in fulfilling this read request.
+      - kube-apiserver: Queries etcd for Pod status records in the default namespace.
+      - etcd: Quickly retrieves the Pod IP, status, and scheduled node name.
+      - kubelet: Continuously updates the API server with container runtime health.
 
-  - title: "Inspect Pod Details"
+  - title: "Discover Nodes & Inspect Pod Details"
     type: challenge
-    prompt: "Describe the 'web' pod to inspect its deep details, including its status, IP address, events, and node assignment."
-    hint: "Use the `kubectl describe` command: `kubectl describe pod web`"
+    prompt: "Inspect the 'web' pod details or discover your cluster's multi-node infrastructure."
+    hint: "kubectl describe pod web (or: kubectl get nodes)"
     expected:
       verb: describe
       resource: pod
       name: web
     behindTheScenes: |
-      - kube-apiserver: Aggregates data by querying the Pod object and its associated Event objects.
-      - etcd: Supplies the requested Pod specification, its real-time status, and chronological event logs.
-      - kubelet: Emitted many of the events you see (e.g., pulling image, created container, started container) to the API server during startup.
-      - kube-scheduler: Emitted the 'Scheduled' event when it initially assigned the node.
-      - CRI: Its status regarding container execution is reflected in the details fetched by the kubelet.
-      - kube-controller-manager, kube-proxy: Continue their background loops ensuring overall cluster stability.
+      - kube-apiserver: Aggregates Pod metadata and chronological Event objects recorded in etcd.
+      - kubelet: Emits events (pulling image, created container, started container) back to the control plane.
+      - kube-scheduler: Recorded the 'Scheduled' event when it bound the Pod to its host node.
       
   - title: "Wrap Up"
     type: transition
-    text: "Excellent work! You have successfully created, viewed, and inspected a standalone Pod. Next, we will explore the lifecycle of a Pod and what happens when things go wrong."
+    text: "Excellent work! You have successfully created, viewed, and inspected a standalone Pod across cluster nodes. Next, we will explore the lifecycle of a standalone Pod and what happens when failure strikes."
     behindTheScenes: |
-      The entire Kubernetes architecture—kube-apiserver, etcd, kube-scheduler, kube-controller-manager, kubelet, kube-proxy, and CRI—has synchronized to realize and display your desired state.
+      The entire Kubernetes architecture—kube-apiserver, etcd, kube-scheduler, kubelet, and CRI—has synchronized to realize and display your desired state.

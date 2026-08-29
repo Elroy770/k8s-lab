@@ -1,12 +1,32 @@
+export interface ClusterNode {
+  name: string;
+  status: "Ready" | "NotReady";
+  roles: string[];
+  ip: string;
+  cpu: string;
+  memory: string;
+  pods: string[];
+}
+
+export interface ActionImpact {
+  userAction: string;
+  summary: string;
+  controlPlaneEvents: string[];
+  dataPlaneEvents: string[];
+  affectedNodes: string[];
+  affectedPods: string[];
+  timestamp: number;
+}
+
 export interface Pod {
   name: string;
   image: string;
-  status: "Running" | "Pending" | "Terminating" | "CrashLoopBackOff";
+  status: "Pending" | "ContainerCreating" | "Running" | "Terminating" | "CrashLoopBackOff";
   node?: string;
   ip?: string;
   labels?: Record<string, string>;
   ownerRef?: {
-    kind: "ReplicaSet" | "Deployment";
+    kind: "ReplicaSet" | "Deployment" | "DaemonSet" | "StatefulSet" | "Job";
     name: string;
   };
   restarts: number;
@@ -74,7 +94,7 @@ export interface Job {
   succeeded: number;
   failed: number;
   image: string;
-  status: 'Running' | 'Complete' | 'Failed';
+  status: "Running" | "Complete" | "Failed";
   age: string;
   namespace?: string;
 }
@@ -91,12 +111,13 @@ export interface CronJob {
 export interface ServicePort {
   port: number | string;
   nodePort?: number | string;
+  targetPort?: number | string;
   protocol?: string;
 }
 
 export interface Service {
   name: string;
-  type: 'ClusterIP' | 'NodePort' | 'LoadBalancer' | 'Headless';
+  type: "ClusterIP" | "NodePort" | "LoadBalancer" | "Headless";
   clusterIP: string;
   externalIP?: string;
   ports: string | ServicePort[];
@@ -107,7 +128,7 @@ export interface Service {
 
 export interface Namespace {
   name: string;
-  status: 'Active' | 'Terminating';
+  status: "Active" | "Terminating";
   age: string;
 }
 
@@ -128,6 +149,7 @@ export interface SecretResource {
 }
 
 export interface ClusterState {
+  nodes: ClusterNode[];
   pods: Pod[];
   replicaSets: ReplicaSet[];
   deployments: Deployment[];
@@ -139,7 +161,89 @@ export interface ClusterState {
   namespaces: Namespace[];
   configMaps: ConfigMapResource[];
   secrets: SecretResource[];
+  files: Record<string, string>;
+  lastActionImpact?: ActionImpact;
 }
+
+export const DEFAULT_NODES: ClusterNode[] = [
+  {
+    name: "control-plane",
+    status: "Ready",
+    roles: ["control-plane"],
+    ip: "172.18.0.2",
+    cpu: "4.0",
+    memory: "8Gi",
+    pods: [],
+  },
+  {
+    name: "worker-node-1",
+    status: "Ready",
+    roles: ["worker"],
+    ip: "172.18.0.3",
+    cpu: "4.0",
+    memory: "8Gi",
+    pods: [],
+  },
+  {
+    name: "worker-node-2",
+    status: "Ready",
+    roles: ["worker"],
+    ip: "172.18.0.4",
+    cpu: "4.0",
+    memory: "8Gi",
+    pods: [],
+  },
+];
+
+export const DEFAULT_FILES: Record<string, string> = {
+  "pod.yaml": `apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod
+  labels:
+    app: nginx
+spec:
+  containers:
+  - name: nginx
+    image: nginx:latest
+    ports:
+    - containerPort: 80
+`,
+  "deployment.yaml": `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.19
+        ports:
+        - containerPort: 80
+`,
+  "service.yaml": `apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  type: ClusterIP
+  selector:
+    app: nginx
+  ports:
+  - port: 80
+    targetPort: 80
+`,
+};
 
 export interface StepExpected {
   verb: string;

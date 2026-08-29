@@ -1,23 +1,19 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
+import { Lesson, ClusterState } from "@/engine/cluster-state";
 import {
-  Lesson,
-  ClusterState,
-  Pod,
-  ReplicaSet,
-  Deployment,
-  DaemonSet,
-  StatefulSet,
-  Job,
-  CronJob,
-  Service,
-  ServicePort,
-  Namespace,
-  ConfigMapResource,
-  SecretResource,
-} from "@/engine/cluster-state";
-import { executeCommand, ExecutionResult } from "@/engine/simulator";
+  executeCommand,
+  ExecutionResult,
+  DEFAULT_NODES,
+  DEFAULT_VIRTUAL_FILES,
+} from "@/engine/simulator";
+import ControlPlaneBar from "@/components/ControlPlaneBar";
+import ActionImpactCard from "@/components/ActionImpactCard";
+import DataPlaneView from "@/components/DataPlaneView";
+import TrafficAnimation from "@/components/TrafficAnimation";
+import VimEditor from "@/components/VimEditor";
+import { saveVirtualFile } from "@/engine/virtual-fs";
 
 interface LabProps {
   lessons: Lesson[];
@@ -32,6 +28,12 @@ interface TerminalItem {
 export default function Lab({ lessons }: LabProps) {
   const [activeLessonIdx, setActiveLessonIdx] = useState(0);
   const [activeStepIdx, setActiveStepIdx] = useState(0);
+  const [activeVimFile, setActiveVimFile] = useState<string | null>(null);
+  const [recentFlow, setRecentFlow] = useState<{
+    flow: string[];
+    description: string;
+    timestamp: number;
+  } | null>(null);
   const [terminalOutput, setTerminalOutput] = useState<TerminalItem[]>([
     {
       id: "init-1",
@@ -41,22 +43,17 @@ export default function Lab({ lessons }: LabProps) {
     {
       id: "init-2",
       type: "system",
-      text: "Type 'help' for available kubectl commands, or follow the guided missions on the left.\n",
+      text: "Type 'help' for available kubectl & file commands, or follow the guided missions on the left.\n",
     },
   ]);
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [currentCommand, setCurrentCommand] = useState("");
   const [showHint, setShowHint] = useState(false);
-  const [showBehindTheScenes, setShowBehindTheScenes] = useState(false);
-  const [recentFlow, setRecentFlow] = useState<{
-    flow: string[];
-    description: string;
-    timestamp: number;
-  } | null>(null);
   const [stepCompleted, setStepCompleted] = useState(false);
 
   const [clusterState, setClusterState] = useState<ClusterState>({
+    nodes: [...DEFAULT_NODES],
     pods: [],
     replicaSets: [],
     deployments: [],
@@ -68,6 +65,7 @@ export default function Lab({ lessons }: LabProps) {
     namespaces: [],
     configMaps: [],
     secrets: [],
+    files: { ...DEFAULT_VIRTUAL_FILES },
   });
 
   const terminalEndRef = useRef<HTMLDivElement>(null);
@@ -79,39 +77,39 @@ export default function Lab({ lessons }: LabProps) {
   // Initialize cluster state when lesson changes
   useEffect(() => {
     if (currentLesson) {
-      if (currentLesson.initialState) {
-        setClusterState({
-          pods: currentLesson.initialState.pods || [],
-          replicaSets: currentLesson.initialState.replicaSets || [],
-          deployments: currentLesson.initialState.deployments || [],
-          daemonSets: currentLesson.initialState.daemonSets || [],
-          statefulSets: currentLesson.initialState.statefulSets || [],
-          jobs: currentLesson.initialState.jobs || [],
-          cronJobs: currentLesson.initialState.cronJobs || [],
-          services: currentLesson.initialState.services || [],
-          namespaces: currentLesson.initialState.namespaces || [],
-          configMaps: currentLesson.initialState.configMaps || [],
-          secrets: currentLesson.initialState.secrets || [],
-        });
-      } else {
-        setClusterState({
-          pods: [],
-          replicaSets: [],
-          deployments: [],
-          daemonSets: [],
-          statefulSets: [],
-          jobs: [],
-          cronJobs: [],
-          services: [],
-          namespaces: [],
-          configMaps: [],
-          secrets: [],
-        });
-      }
+      const initPods = currentLesson.initialState?.pods || [];
+      const initNodes = (currentLesson.initialState?.nodes || DEFAULT_NODES).map((n) => ({
+        ...n,
+        pods: initPods.filter((p) => p.node === n.name).map((p) => p.name),
+      }));
+
+      setClusterState((prev) => ({
+        nodes: initNodes,
+        pods: initPods.map((p, idx) => ({
+          ...p,
+          node: p.node || (idx % 2 === 0 ? "worker-node-1" : "worker-node-2"),
+          ip: p.ip || `10.244.${(idx % 2) + 1}.${10 + idx}`,
+          restarts: p.restarts ?? 0,
+          age: p.age || "2m",
+        })),
+        replicaSets: currentLesson.initialState?.replicaSets || [],
+        deployments: currentLesson.initialState?.deployments || [],
+        daemonSets: currentLesson.initialState?.daemonSets || [],
+        statefulSets: currentLesson.initialState?.statefulSets || [],
+        jobs: currentLesson.initialState?.jobs || [],
+        cronJobs: currentLesson.initialState?.cronJobs || [],
+        services: currentLesson.initialState?.services || [],
+        namespaces: currentLesson.initialState?.namespaces || [],
+        configMaps: currentLesson.initialState?.configMaps || [],
+        secrets: currentLesson.initialState?.secrets || [],
+        files: currentLesson.initialState?.files || prev.files || { ...DEFAULT_VIRTUAL_FILES },
+        lastActionImpact: undefined,
+      }));
+
       setActiveStepIdx(0);
       setShowHint(false);
-      setShowBehindTheScenes(false);
       setStepCompleted(false);
+      setActiveVimFile(null);
       setRecentFlow(null);
 
       setTerminalOutput((prev) => [
@@ -149,6 +147,25 @@ export default function Lab({ lessons }: LabProps) {
     }
 
     const result: ExecutionResult = executeCommand(cmd, clusterState, currentStep);
+
+    if (result.openVim) {
+      setActiveVimFile(result.openVim);
+      setCurrentCommand("");
+      setTerminalOutput((prev) => [
+        ...prev,
+        {
+          id: `cmd-${Date.now()}`,
+          type: "cmd",
+          text: `learner@k8s:~$ ${cmd}`,
+        },
+        {
+          id: `out-${Date.now()}`,
+          type: "system",
+          text: `Opened '${result.openVim}' in Vim editor. (Use :wq to save & return, or click buttons on top bar)`,
+        },
+      ]);
+      return;
+    }
 
     const newItems: TerminalItem[] = [
       {
@@ -194,6 +211,25 @@ export default function Lab({ lessons }: LabProps) {
     }
   };
 
+  const handleVimSave = (filename: string, content: string) => {
+    setClusterState((prev) => ({
+      ...prev,
+      files: {
+        ...prev.files,
+        [filename]: content,
+      },
+    }));
+
+    setTerminalOutput((prev) => [
+      ...prev,
+      {
+        id: `vim-save-${Date.now()}`,
+        type: "success",
+        text: `"${filename}" written. To apply this manifest to the cluster, run: kubectl apply -f ${filename}`,
+      },
+    ]);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -229,17 +265,6 @@ export default function Lab({ lessons }: LabProps) {
     }
   };
 
-  const formatServicePortDisplay = (ports: string | ServicePort[] | undefined) => {
-    if (!ports) return "80/TCP";
-    if (typeof ports === "string") return ports;
-    if (Array.isArray(ports)) {
-      return ports
-        .map((p) => `${p.port}${p.nodePort ? `:${p.nodePort}` : ""}/${p.protocol || "TCP"}`)
-        .join(", ");
-    }
-    return "80/TCP";
-  };
-
   if (!currentLesson) {
     return (
       <div className="flex h-screen items-center justify-center bg-[#070b14] text-white">
@@ -256,11 +281,11 @@ export default function Lab({ lessons }: LabProps) {
 
   return (
     <div className="lab-shell flex h-screen w-screen flex-col text-slate-100 font-sans select-none overflow-hidden">
-      {/* Top Header & Lesson Navigator */}
+      {/* ================= TOP HEADER & LESSON NAVIGATOR ================= */}
       <header className="lab-header flex shrink-0 items-center justify-between border-b z-20">
         <div className="flex items-center space-x-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 font-bold text-white shadow-lg shadow-blue-500/25">
-            K
+            ☸
           </div>
           <div>
             <div className="flex items-center gap-2">
@@ -272,7 +297,7 @@ export default function Lab({ lessons }: LabProps) {
               </span>
             </div>
             <p className="text-[11px] text-slate-400">
-              Run commands. Watch Kubernetes reconcile.
+              Run commands & edit YAML. Watch Kubernetes reconcile.
             </p>
           </div>
         </div>
@@ -327,51 +352,54 @@ export default function Lab({ lessons }: LabProps) {
         </div>
       </header>
 
-      {/* Main Split Layout: Left (Story + Terminal) vs Right (Live Cluster Visualizer) */}
+      {/* ================= MAIN SPLIT LAYOUT ================= */}
       <div className="lab-main flex flex-1 overflow-hidden">
-        {/* ================= LEFT SIDE: Story, Objectives & Terminal ================= */}
+        {/* ================= LEFT SIDE: QUESTIONS & TERMINAL ================= */}
         <div className="lab-lesson-pane flex flex-col border-r overflow-hidden">
-          {/* Upper Section: Lesson Story, Explanation & Step Card */}
-          <div className="lab-lesson-scroll flex-1 overflow-y-auto space-y-5 thin-scroll">
+          {/* Upper Section: Clean Story & Challenge Questions */}
+          <div className="lab-lesson-scroll flex-1 overflow-y-auto space-y-4 thin-scroll">
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-blue-400">Guided workspace</div>
-                <h2 className="mt-1 text-lg font-bold tracking-tight text-slate-100">Lesson process</h2>
+                <h2 className="mt-0.5 text-base font-bold tracking-tight text-slate-100">Lesson Challenge</h2>
               </div>
-              <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-[10px] font-semibold text-blue-300">Learn → run → observe</span>
+              <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-[10px] font-semibold text-blue-300">
+                Learn → run → observe
+              </span>
             </div>
+
             {/* Lesson Title & Intro Banner */}
-            <div className="lab-card rounded-xl border p-5 shadow-lg">
-              <div className="flex items-center justify-between mb-2">
+            <div className="lab-card rounded-xl border p-4 shadow-lg">
+              <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-blue-400">
                   Lesson {activeLessonIdx + 1} of {lessons.length}
                 </span>
-                <span className="text-[11px] font-mono text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded border border-slate-700/50">
-                  Progress: Step {activeStepIdx + 1} of {totalSteps} ({progressPct}%)
+                <span className="text-[10px] font-mono text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded border border-slate-700/50">
+                  Step {activeStepIdx + 1} of {totalSteps} ({progressPct}%)
                 </span>
               </div>
-              <h2 className="text-xl font-extrabold text-white tracking-tight">
+              <h2 className="text-lg font-extrabold text-white tracking-tight">
                 {currentLesson.title}
               </h2>
-              <p className="mt-2 text-xs text-slate-300 leading-relaxed whitespace-pre-line">
+              <p className="mt-1.5 text-xs text-slate-300 leading-relaxed whitespace-pre-line">
                 {currentLesson.intro}
               </p>
             </div>
 
-            {/* Current Step Card */}
+            {/* Current Challenge / Step Card */}
             {currentStep && (
               <div
-                className={`lab-step-card rounded-xl border p-5 shadow-xl transition-all ${
+                className={`lab-step-card rounded-xl border p-4 shadow-xl transition-all ${
                   stepCompleted
                     ? "border-emerald-500/60 bg-emerald-950/20 shadow-emerald-950/30"
                     : "border-blue-500/50 bg-[#121c32] shadow-blue-950/20"
                 }`}
               >
                 {/* Step Header */}
-                <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center justify-between mb-2.5">
                   <div className="flex items-center gap-2">
                     <span
-                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                         currentStep.type === "challenge"
                           ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
                           : currentStep.type === "observation"
@@ -383,7 +411,7 @@ export default function Lab({ lessons }: LabProps) {
                     >
                       {currentStep.type}
                     </span>
-                    <h3 className="text-sm font-bold text-white">
+                    <h3 className="text-xs font-bold text-white">
                       {currentStep.title || `Step ${activeStepIdx + 1}`}
                     </h3>
                   </div>
@@ -393,23 +421,23 @@ export default function Lab({ lessons }: LabProps) {
                       ✓ Mission Complete!
                     </span>
                   ) : (
-                    <span className="text-xs font-mono text-slate-400">
+                    <span className="text-[11px] font-mono text-slate-400">
                       Step {activeStepIdx + 1} / {totalSteps}
                     </span>
                   )}
                 </div>
 
-                {/* Step Body (Text / Description / Prompt) */}
-                <div className="text-xs text-slate-200 leading-relaxed whitespace-pre-line mb-4 font-sans">
+                {/* Step Description */}
+                <div className="text-xs text-slate-200 leading-relaxed whitespace-pre-line mb-3 font-sans">
                   {currentStep.description || currentStep.text || currentStep.prompt}
                 </div>
 
                 {/* Actionable Prompt Banner for Challenges */}
                 {currentStep.type === "challenge" && currentStep.prompt && (
-                  <div className="mb-4 rounded-lg bg-black/40 p-3.5 border border-amber-500/30 flex items-start gap-2.5">
+                  <div className="mb-3 rounded-lg bg-black/40 p-3 border border-amber-500/30 flex items-start gap-2.5">
                     <span className="text-amber-400 text-base">🎯</span>
                     <div className="flex-1">
-                      <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
                         Your Action Required:
                       </div>
                       <p className="text-xs font-medium text-slate-100 mt-0.5">
@@ -419,9 +447,9 @@ export default function Lab({ lessons }: LabProps) {
                   </div>
                 )}
 
-                {/* Hint Bar & One-Click Run */}
+                {/* Hint Bar & Quick Action */}
                 {currentStep.hint && (
-                  <div className="mb-4">
+                  <div className="mb-3">
                     <div className="flex items-center justify-between">
                       <button
                         onClick={() => setShowHint(!showHint)}
@@ -432,7 +460,7 @@ export default function Lab({ lessons }: LabProps) {
                     </div>
 
                     {showHint && (
-                      <div className="mt-2 rounded-lg bg-black/60 p-3 border border-amber-500/30 flex items-center justify-between gap-3">
+                      <div className="mt-2 rounded-lg bg-black/60 p-2.5 border border-amber-500/30 flex items-center justify-between gap-3">
                         <code className="text-xs font-mono text-amber-200 break-all select-all">
                           {currentStep.hint}
                         </code>
@@ -451,38 +479,12 @@ export default function Lab({ lessons }: LabProps) {
                   </div>
                 )}
 
-                {/* Behind the Scenes Collapsible Drawer */}
-                {currentStep.behindTheScenes && (
-                  <div className="rounded-lg border border-purple-900/50 bg-[#16122b] overflow-hidden mb-4">
-                    <button
-                      onClick={() => setShowBehindTheScenes(!showBehindTheScenes)}
-                      className="w-full flex items-center justify-between px-4 py-2.5 bg-purple-950/40 hover:bg-purple-950/70 text-xs font-bold text-purple-300 transition-colors"
-                    >
-                      <span className="flex items-center gap-2">
-                        🔧 Behind the Scenes: Component Architecture
-                      </span>
-                      <span>{showBehindTheScenes ? "▲" : "▼"}</span>
-                    </button>
-
-                    {showBehindTheScenes && (
-                      <div className="p-4 text-xs text-purple-200 border-t border-purple-900/50 space-y-3">
-                        <p className="whitespace-pre-line leading-relaxed font-sans">
-                          {currentStep.behindTheScenes}
-                        </p>
-                        <div className="rounded bg-black/60 p-2.5 text-[11px] font-mono text-purple-300 border border-purple-900/40 text-center">
-                          kubectl ➔ API Server ➔ etcd ➔ Scheduler ➔ kubelet ➔ CRI
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Continue Button for Non-Challenge Steps or Completed Steps */}
+                {/* Continue Button for Observation / Non-challenge Steps */}
                 {(currentStep.type !== "challenge" || stepCompleted) && (
                   <div className="flex justify-end pt-1">
                     <button
                       onClick={handleNextStep}
-                      className="rounded-lg bg-blue-600 hover:bg-blue-500 px-5 py-2 text-xs font-bold text-white shadow-lg shadow-blue-600/30 transition-all flex items-center gap-1.5"
+                      className="rounded-lg bg-blue-600 hover:bg-blue-500 px-4 py-1.5 text-xs font-bold text-white shadow-lg shadow-blue-600/30 transition-all flex items-center gap-1.5"
                     >
                       {activeStepIdx === totalSteps - 1
                         ? "Finish & Next Lesson →"
@@ -492,496 +494,249 @@ export default function Lab({ lessons }: LabProps) {
                 )}
               </div>
             )}
-          </div>
-
-          {/* Lower Section: Integrated Interactive Terminal */}
-          <div
-            className="lab-terminal flex flex-col border-t font-mono text-xs cursor-text relative select-text"
-            onClick={() => inputRef.current?.focus()}
-          >
-            {/* Terminal Title Bar */}
-            <div className="lab-terminal-bar flex items-center justify-between px-4 border-b select-none">
-              <div className="flex items-center space-x-2">
-                <span className="h-2.5 w-2.5 rounded-full bg-red-500/80"></span>
-                <span className="h-2.5 w-2.5 rounded-full bg-amber-500/80"></span>
-                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/80"></span>
-                <span className="ml-2 text-[11px] font-semibold text-slate-300">
-                  terminal — simulated kubectl
-                </span>
-              </div>
-              <div className="flex items-center space-x-3 text-[11px]">
-                <span className="text-slate-500">History: ↑ / ↓</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setTerminalOutput([]);
-                    setCurrentCommand("");
-                  }}
-                  className="rounded bg-[#1a243a] px-2 py-0.5 text-slate-400 hover:text-white transition-colors"
-                  title="Clear Terminal Output"
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-
-            {/* Terminal Output Stream */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-1.5 thin-scroll">
-              {terminalOutput.map((item) => (
-                <div
-                  key={item.id}
-                  className={`whitespace-pre-wrap leading-relaxed ${
-                    item.type === "cmd"
-                      ? "text-sky-300 font-bold"
-                      : item.type === "success"
-                      ? "text-emerald-400 font-semibold"
-                      : item.type === "error"
-                      ? "text-rose-400 font-semibold"
-                      : item.type === "system"
-                      ? "text-amber-400 font-semibold"
-                      : "text-slate-300"
-                  }`}
-                >
-                  {item.text}
-                </div>
-              ))}
-              <div ref={terminalEndRef} />
-            </div>
-
-            {/* Terminal Input Prompt */}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleCommandRun(currentCommand);
-              }}
-              className="flex items-center border-t border-[#1b253b] bg-[#090f1d] px-4 py-2"
-            >
-              <span className="text-emerald-400 font-bold mr-2 select-none">
-                learner@k8s:~$
-              </span>
-              <input
-                ref={inputRef}
-                type="text"
-                value={currentCommand}
-                onChange={(e) => setCurrentCommand(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Type a kubectl command (e.g. kubectl get pods)..."
-                autoFocus
-                autoComplete="off"
-                spellCheck="false"
-                className="flex-1 bg-transparent text-slate-100 outline-none placeholder:text-slate-600 font-mono text-xs"
+          </div>          {/* Lower Section: Integrated Interactive Terminal or In-Terminal Vim Editor */}
+          {activeVimFile ? (
+            <div className="lab-terminal flex flex-col border-t h-[380px] p-2 bg-[#060b16] relative animate-fadeIn">
+              <VimEditor
+                filename={activeVimFile}
+                initialContent={clusterState.files?.[activeVimFile]}
+                onSave={(fn, fileContent) => {
+                  setClusterState((prev) => ({
+                    ...prev,
+                    files: { ...(prev.files || {}), [fn]: fileContent },
+                  }));
+                  saveVirtualFile(fn, fileContent);
+                }}
+                onSaveAndExit={(fn, fileContent) => {
+                  setClusterState((prev) => ({
+                    ...prev,
+                    files: { ...(prev.files || {}), [fn]: fileContent },
+                  }));
+                  saveVirtualFile(fn, fileContent);
+                  const lineCount = fileContent.split("\n").length;
+                  setTerminalOutput((prev) => [
+                    ...prev,
+                    {
+                      id: `vim-save-exit-${Date.now()}`,
+                      type: "system",
+                      text: `"${fn}" ${lineCount}L, ${fileContent.length}B written. (Exited Vim)`,
+                    },
+                  ]);
+                  setActiveVimFile(null);
+                  setTimeout(() => inputRef.current?.focus(), 50);
+                }}
+                onClose={() => {
+                  setActiveVimFile(null);
+                  setTimeout(() => inputRef.current?.focus(), 50);
+                }}
+                onExit={() => {
+                  setActiveVimFile(null);
+                  setTimeout(() => inputRef.current?.focus(), 50);
+                }}
               />
-            </form>
-          </div>
+            </div>
+          ) : (
+            <div
+              className="lab-terminal flex flex-col border-t font-mono text-xs cursor-text relative select-text terminal-glow transition-all duration-300"
+              onClick={() => inputRef.current?.focus()}
+            >
+              {/* Terminal Title Bar */}
+              <div className="lab-terminal-bar flex items-center justify-between px-4 py-2 border-b select-none">
+                <div className="flex items-center space-x-2">
+                  <span className="h-2.5 w-2.5 rounded-full bg-red-500/80"></span>
+                  <span className="h-2.5 w-2.5 rounded-full bg-amber-500/80"></span>
+                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/80"></span>
+                  <span className="ml-2 text-[11px] font-semibold text-slate-300">
+                    terminal — simulated kubectl & vim
+                  </span>
+                </div>
+
+                {/* Quick Vim Manifest Launchers & Controls */}
+                <div className="flex items-center space-x-2 text-[11px]">
+                  <span className="text-slate-500 hidden sm:inline">Vim:</span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveVimFile("pod.yaml");
+                    }}
+                    className="rounded bg-sky-950/70 hover:bg-sky-900/90 text-sky-300 px-1.5 py-0.5 text-[10px] font-mono border border-sky-800/40 transition-colors"
+                    title="Open pod.yaml in Vim"
+                  >
+                    pod.yaml
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveVimFile("deployment.yaml");
+                    }}
+                    className="rounded bg-sky-950/70 hover:bg-sky-900/90 text-sky-300 px-1.5 py-0.5 text-[10px] font-mono border border-sky-800/40 transition-colors"
+                    title="Open deployment.yaml in Vim"
+                  >
+                    deployment.yaml
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveVimFile("service.yaml");
+                    }}
+                    className="rounded bg-sky-950/70 hover:bg-sky-900/90 text-sky-300 px-1.5 py-0.5 text-[10px] font-mono border border-sky-800/40 transition-colors"
+                    title="Open service.yaml in Vim"
+                  >
+                    service.yaml
+                  </button>
+
+                  <span className="text-slate-600">|</span>
+
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setTerminalOutput([]);
+                      setCurrentCommand("");
+                    }}
+                    className="rounded bg-[#1a243a] px-2 py-0.5 text-slate-400 hover:text-white transition-colors"
+                    title="Clear Terminal Output"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              {/* Terminal Output Stream */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-1.5 thin-scroll">
+                {terminalOutput.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`whitespace-pre-wrap leading-relaxed ${
+                      item.type === "cmd"
+                        ? "text-sky-300 font-bold"
+                        : item.type === "success"
+                        ? "text-emerald-400 font-semibold"
+                        : item.type === "error"
+                        ? "text-rose-400 font-semibold"
+                        : item.type === "system"
+                        ? "text-amber-400 font-semibold"
+                        : "text-slate-300"
+                    }`}
+                  >
+                    {item.text}
+                  </div>
+                ))}
+                <div ref={terminalEndRef} />
+              </div>
+
+              {/* Terminal Input Prompt */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleCommandRun(currentCommand);
+                }}
+                className="flex items-center border-t border-[#1b253b] bg-[#090f1d] px-4 py-2"
+              >
+                <span className="text-emerald-400 font-bold mr-2 select-none">
+                  learner@k8s:~$
+                </span>
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={currentCommand}
+                  onChange={(e) => setCurrentCommand(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Type a command (e.g. vim pod.yaml, kubectl apply -f pod.yaml)..."
+                  autoFocus
+                  autoComplete="off"
+                  spellCheck="false"
+                  className="flex-1 bg-transparent text-slate-100 outline-none placeholder:text-slate-600 font-mono text-xs"
+                />
+              </form>
+            </div>
+          )}
         </div>
 
-        {/* ================= RIGHT SIDE: Kubernetes Cluster Simulation ================= */}
-        <div className="lab-simulation-pane flex flex-col overflow-y-auto space-y-6 thin-scroll">
-          {/* Cluster Header & Component Flow Banner */}
-          <div>
-            <div className="lab-sim-header flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse" />
-                <div>
-                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-blue-400">Workspace / simulation</div>
-                  <h2 className="mt-1 text-lg font-bold tracking-tight text-slate-100">Kubernetes processes</h2>
-                </div>
-              </div>
-              <div className="flex items-center space-x-2 text-[11px] font-mono text-slate-400">
-                <span className="rounded bg-slate-800/80 px-2 py-0.5 border border-slate-700/60">
-                  Namespace: default
-                </span>
-                <span className="rounded bg-slate-800/80 px-2 py-0.5 border border-slate-700/60">
-                  Pods: {clusterState.pods.length}
-                </span>
+        {/* ================= RIGHT SIDE: KUBERNETES PROCESSES ================= */}
+        <div className="lab-simulation-pane flex flex-col overflow-y-auto space-y-4 thin-scroll">
+          {/* Header */}
+          <div className="lab-sim-header flex items-center justify-between pb-2">
+            <div className="flex items-center gap-2">
+              <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse" />
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-blue-400">Kubernetes processes</div>
+                <h2 className="mt-0.5 text-base font-bold tracking-tight text-slate-100">Live Cluster Simulation</h2>
               </div>
             </div>
-
-            {/* Live Component Activity Breadcrumb */}
-            {recentFlow && (
-              <div className="rounded-xl border border-blue-500/40 bg-blue-950/30 p-3.5 shadow-lg transition-all animate-fadeIn">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-blue-300 mb-1.5 flex items-center gap-1.5">
-                  <span className="animate-spin text-xs">☸</span> Active Component Flow:
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs mb-2">
-                  {recentFlow.flow.map((comp, i) => (
-                    <React.Fragment key={i}>
-                      <span className="rounded bg-blue-900/60 px-2 py-0.5 text-blue-200 border border-blue-700/60 font-semibold text-[11px]">
-                        {comp}
-                      </span>
-                      {i < recentFlow.flow.length - 1 && (
-                        <span className="text-blue-400 font-bold">➔</span>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </div>
-                <p className="text-[11px] text-slate-300 leading-snug">
-                  {recentFlow.description}
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* ================= 1. CONTROL PLANE (MASTER) ================= */}
-          <div className="lab-section rounded-xl border p-5 shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-indigo-500/20 pb-3">
-              <div className="flex items-center gap-2">
-                <span className="text-base text-indigo-400">🧠</span>
-                <div>
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-200">
-                    Control Plane (Master Plane)
-                  </h3>
-                  <p className="text-[10px] text-indigo-400/80">
-                    Global State, Scheduling, & Workload Controllers
-                  </p>
-                </div>
-              </div>
-              <span className="text-[10px] font-mono text-indigo-300 bg-indigo-900/40 px-2 py-0.5 rounded border border-indigo-700/50">
-                Active
+            <div className="flex items-center space-x-2 text-[11px] font-mono text-slate-400">
+              <span className="rounded bg-slate-800/80 px-2 py-0.5 border border-slate-700/60">
+                Namespace: default
+              </span>
+              <span className="rounded bg-emerald-950/60 px-2 py-0.5 border border-emerald-700/50 text-emerald-300 font-bold">
+                {clusterState.pods.length} {clusterState.pods.length === 1 ? "Pod" : "Pods"} Online
               </span>
             </div>
-
-            {/* Core Control Plane Components Grid */}
-            <div className="grid grid-cols-4 gap-2 text-center text-[10px] font-mono">
-              <div className="rounded bg-indigo-900/30 p-2 border border-indigo-800/40">
-                <div className="font-bold text-indigo-300">kube-apiserver</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">REST API Gateway</div>
-              </div>
-              <div className="rounded bg-indigo-900/30 p-2 border border-indigo-800/40">
-                <div className="font-bold text-indigo-300">etcd</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">Key-Value Store</div>
-              </div>
-              <div className="rounded bg-indigo-900/30 p-2 border border-indigo-800/40">
-                <div className="font-bold text-indigo-300">kube-scheduler</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">Node Placement</div>
-              </div>
-              <div className="rounded bg-indigo-900/30 p-2 border border-indigo-800/40">
-                <div className="font-bold text-indigo-300">controller-mgr</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">Reconciliation</div>
-              </div>
-            </div>
-
-            {/* Control Plane Resources: Deployments, ReplicaSets, StatefulSets, DaemonSets, Jobs, ConfigMaps, Secrets */}
-            <div className="space-y-3 pt-2">
-              {/* Deployments */}
-              {clusterState.deployments.length > 0 && (
-                <div className="space-y-1.5">
-                  <div className="text-[11px] font-bold text-blue-400 flex items-center gap-1.5">
-                    <span>📦</span> Deployments ({clusterState.deployments.length})
-                  </div>
-                  <div className="grid gap-2">
-                    {clusterState.deployments.map((d, i) => (
-                      <div
-                        key={i}
-                        className="rounded-lg bg-blue-950/40 border border-blue-800/60 p-3 flex justify-between items-center shadow-md"
-                      >
-                        <div>
-                          <div className="font-mono text-xs font-bold text-blue-200">
-                            {d.name}
-                          </div>
-                          <div className="text-[10px] text-blue-400 font-mono mt-0.5">
-                            Image: {d.image} • Revision: {d.revision || 1}
-                          </div>
-                        </div>
-                        <div className="text-right bg-blue-900/50 px-2.5 py-1 rounded border border-blue-700/50">
-                          <span className="text-[11px] text-blue-200 font-mono font-bold">
-                            {d.available || d.upToDate || 0} / {d.replicas} Replicas
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* ReplicaSets */}
-              {clusterState.replicaSets.length > 0 && (
-                <div className="space-y-1.5">
-                  <div className="text-[11px] font-bold text-purple-400 flex items-center gap-1.5">
-                    <span>🔄</span> ReplicaSets ({clusterState.replicaSets.length})
-                  </div>
-                  <div className="grid gap-2">
-                    {clusterState.replicaSets.map((rs, i) => (
-                      <div
-                        key={i}
-                        className={`rounded-lg border p-3 flex justify-between items-center transition-all ${
-                          rs.desiredReplicas === 0
-                            ? "bg-slate-900/40 border-slate-800 opacity-40"
-                            : "bg-purple-950/40 border-purple-800/60 shadow-md"
-                        }`}
-                      >
-                        <div>
-                          <div className="font-mono text-xs font-bold text-purple-200">
-                            {rs.name}
-                          </div>
-                          <div className="text-[10px] text-purple-400 font-mono mt-0.5">
-                            Image: {rs.image} {rs.ownerRef ? `• Owner: ${rs.ownerRef.name}` : ""}
-                          </div>
-                        </div>
-                        <div className="bg-purple-900/50 px-2.5 py-1 rounded border border-purple-700/50 font-mono text-[11px] text-purple-200 font-bold">
-                          {rs.readyReplicas || rs.currentReplicas || 0} / {rs.desiredReplicas} Pods
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* StatefulSets */}
-              {clusterState.statefulSets.length > 0 && (
-                <div className="space-y-1.5">
-                  <div className="text-[11px] font-bold text-indigo-400 flex items-center gap-1.5">
-                    <span>💾</span> StatefulSets ({clusterState.statefulSets.length})
-                  </div>
-                  <div className="grid gap-2">
-                    {clusterState.statefulSets.map((ss, i) => (
-                      <div
-                        key={i}
-                        className="rounded-lg bg-indigo-950/40 border border-indigo-800/60 p-3 flex justify-between items-center shadow-md"
-                      >
-                        <div>
-                          <div className="font-mono text-xs font-bold text-indigo-200">
-                            {ss.name}
-                          </div>
-                          <div className="text-[10px] text-indigo-400 font-mono mt-0.5">
-                            Image: {ss.image} • Service: {ss.serviceName || "headless"}
-                          </div>
-                        </div>
-                        <div className="bg-indigo-900/50 px-2.5 py-1 rounded border border-indigo-700/50 font-mono text-[11px] text-indigo-200 font-bold">
-                          {ss.readyReplicas || 0} / {ss.replicas} Replicas
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* DaemonSets */}
-              {clusterState.daemonSets.length > 0 && (
-                <div className="space-y-1.5">
-                  <div className="text-[11px] font-bold text-amber-400 flex items-center gap-1.5">
-                    <span>👻</span> DaemonSets ({clusterState.daemonSets.length})
-                  </div>
-                  <div className="grid gap-2">
-                    {clusterState.daemonSets.map((ds, i) => (
-                      <div
-                        key={i}
-                        className="rounded-lg bg-amber-950/40 border border-amber-800/60 p-3 flex justify-between items-center shadow-md"
-                      >
-                        <div>
-                          <div className="font-mono text-xs font-bold text-amber-200">
-                            {ds.name}
-                          </div>
-                          <div className="text-[10px] text-amber-400 font-mono mt-0.5">
-                            Image: {ds.image} • 1 pod per scheduled node
-                          </div>
-                        </div>
-                        <div className="bg-amber-900/50 px-2.5 py-1 rounded border border-amber-700/50 font-mono text-[11px] text-amber-200 font-bold">
-                          {ds.readyPods || ds.currentPods || 0} / {ds.desiredNodes} Nodes
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Jobs */}
-              {clusterState.jobs.length > 0 && (
-                <div className="space-y-1.5">
-                  <div className="text-[11px] font-bold text-teal-400 flex items-center gap-1.5">
-                    <span>🎯</span> Jobs ({clusterState.jobs.length})
-                  </div>
-                  <div className="grid gap-2">
-                    {clusterState.jobs.map((j, i) => (
-                      <div
-                        key={i}
-                        className="rounded-lg bg-teal-950/40 border border-teal-800/60 p-3 flex justify-between items-center shadow-md"
-                      >
-                        <div>
-                          <div className="font-mono text-xs font-bold text-teal-200">
-                            {j.name}
-                          </div>
-                          <div className="text-[10px] text-teal-400 font-mono mt-0.5">
-                            Image: {j.image} • Run to Completion
-                          </div>
-                        </div>
-                        <div className="bg-teal-900/50 px-2.5 py-1 rounded border border-teal-700/50 font-mono text-[11px] text-teal-200 font-bold">
-                          {j.succeeded || 0} / {j.completions} Succeeded
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* ConfigMaps & Secrets Row */}
-              {(clusterState.configMaps.length > 0 || clusterState.secrets.length > 0) && (
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  {/* ConfigMaps */}
-                  {clusterState.configMaps.length > 0 && (
-                    <div className="space-y-1">
-                      <div className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
-                        <span>📄</span> ConfigMaps
-                      </div>
-                      {clusterState.configMaps.map((cm, i) => (
-                        <div
-                          key={i}
-                          className="rounded bg-emerald-950/30 border border-emerald-800/50 p-2 text-[11px] font-mono text-emerald-200"
-                        >
-                          <div className="font-bold truncate">{cm.name}</div>
-                          <div className="text-[9px] text-emerald-400">
-                            {Object.keys(cm.data || {}).length} keys stored
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Secrets */}
-                  {clusterState.secrets.length > 0 && (
-                    <div className="space-y-1">
-                      <div className="text-[10px] font-bold text-rose-400 flex items-center gap-1">
-                        <span>🔐</span> Secrets
-                      </div>
-                      {clusterState.secrets.map((sec, i) => (
-                        <div
-                          key={i}
-                          className="rounded bg-rose-900/30 border border-rose-800/50 p-2 text-[11px] font-mono text-rose-200"
-                        >
-                          <div className="font-bold truncate">{sec.name}</div>
-                          <div className="text-[9px] text-rose-400">
-                            {sec.type} • {Object.keys(sec.data || {}).length || sec.dataKeys?.length || 0} keys
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
           </div>
 
-          {/* ================= 2. DATA PLANE (WORKER NODES) ================= */}
-          <div className="lab-section rounded-xl border p-5 shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-emerald-500/20 pb-3">
-              <div className="flex items-center gap-2">
-                <span className="text-base text-emerald-400">🖥️</span>
-                <div>
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-200">
-                    Data Plane (Worker Nodes)
-                  </h3>
-                  <p className="text-[10px] text-emerald-400/80">
-                    Host execution environments for application containers
-                  </p>
-                </div>
-              </div>
-              <span className="text-[10px] font-mono text-emerald-300 bg-emerald-900/40 px-2 py-0.5 rounded border border-emerald-700/50">
-                worker-node-1 (Ready)
-              </span>
-            </div>
+          {/* 1. Soft Ambient Control Plane Bar */}
+          <ControlPlaneBar
+            recentFlow={recentFlow}
+            clusterState={clusterState}
+            activeComponents={
+              clusterState.lastActionImpact
+                ? ["kube-apiserver", "kube-scheduler", "kube-controller-manager", "etcd"]
+                : recentFlow?.flow || []
+            }
+          />
 
-            {/* Node Daemon Agents */}
-            <div className="grid grid-cols-2 gap-2 text-center text-[10px] font-mono">
-              <div className="rounded bg-emerald-900/30 p-2 border border-emerald-800/40">
-                <div className="font-bold text-emerald-300">kubelet</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">Pod & Container Supervisor</div>
-              </div>
-              <div className="rounded bg-emerald-900/30 p-2 border border-emerald-800/40">
-                <div className="font-bold text-emerald-300">kube-proxy</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">iptables / Service Routing</div>
-              </div>
-            </div>
+          {/* 2. Prominent "What Did I Just Do?" Action Impact Banner */}
+          <ActionImpactCard
+            impact={clusterState.lastActionImpact}
+            recentFlow={recentFlow}
+            lastCommand={commandHistory[commandHistory.length - 1]}
+            clusterState={clusterState}
+          />
 
-            {/* Services on Data Plane */}
-            {clusterState.services.length > 0 && (
-              <div className="space-y-1.5">
-                <div className="text-[11px] font-bold text-cyan-400 flex items-center gap-1.5">
-                  <span>🔌</span> Active Services ({clusterState.services.length})
-                </div>
-                <div className="grid gap-2">
-                  {clusterState.services.map((svc, i) => (
-                    <div
-                      key={i}
-                      className="rounded-lg bg-cyan-950/40 border border-cyan-800/60 p-3 flex justify-between items-center shadow-md font-mono"
-                    >
-                      <div>
-                        <div className="text-xs font-bold text-cyan-200">{svc.name}</div>
-                        <div className="text-[10px] text-cyan-400 mt-0.5">
-                          {svc.type} • ClusterIP: {svc.clusterIP}
-                        </div>
-                      </div>
-                      <div className="bg-cyan-900/50 px-2.5 py-1 rounded border border-cyan-700/50 text-[11px] text-cyan-200 font-bold">
-                        {formatServicePortDisplay(svc.ports)}
-                      </div>
+          {/* 3. Live Traffic / kube-proxy Animation */}
+          <TrafficAnimation services={clusterState.services} pods={clusterState.pods} />
+
+          {/* 4. Spotlit Data Plane & Multi-Node Container Bays */}
+          <DataPlaneView clusterState={clusterState} />
+
+          {/* 5. Configuration & Secrets Storage */}
+          {(clusterState.configMaps.length > 0 || clusterState.secrets.length > 0) && (
+            <div className="rounded-xl border border-slate-800 bg-[#091120]/80 p-3.5 space-y-2">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
+                <span>Cluster Storage & Configuration Data</span>
+                <span className="text-[10px] font-mono text-slate-500">etcd Config Store</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono">
+                {clusterState.configMaps.map((cm, i) => (
+                  <div
+                    key={i}
+                    className="rounded-lg bg-emerald-950/30 border border-emerald-800/50 p-2.5 text-emerald-200"
+                  >
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <span>📄</span>
+                      <span className="truncate">{cm.name}</span>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Pods Running in CRI Container Runtime */}
-            <div className="space-y-2">
-              <div className="text-[11px] font-bold text-emerald-400 flex items-center justify-between">
-                <span className="flex items-center gap-1.5">
-                  <span>🐋</span> containerd / CRI — Running Pods ({clusterState.pods.length})
-                </span>
-                <span className="text-[10px] font-mono text-slate-400">
-                  Shared Network & Storage
-                </span>
-              </div>
-
-              {clusterState.pods.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-800 p-6 text-center text-xs text-slate-500 font-mono">
-                  No Pods currently scheduled on this node.
-                  <br />
-                  <span className="text-blue-400">Run a kubectl command in the terminal to deploy!</span>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                  {clusterState.pods.map((p, i) => (
-                    <div
-                      key={p.name || i}
-                      className="rounded-lg border border-emerald-500/40 bg-emerald-950/30 p-3 shadow-md hover:border-emerald-500/70 transition-all font-mono text-xs"
-                    >
-                      <div className="flex items-center justify-between mb-1.5">
-                        <div className="flex items-center gap-1.5 truncate">
-                          <span
-                            className={`h-2 w-2 rounded-full ${
-                              p.status === "Running"
-                                ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)] animate-pulse"
-                                : p.status === "Pending"
-                                ? "bg-amber-400 animate-ping"
-                                : "bg-rose-500"
-                            }`}
-                          />
-                          <span className="font-bold text-slate-100 truncate">{p.name}</span>
-                        </div>
-                        <span
-                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                            p.status === "Running"
-                              ? "bg-emerald-900/80 text-emerald-300"
-                              : "bg-amber-900/80 text-amber-300"
-                          }`}
-                        >
-                          {p.status}
-                        </span>
-                      </div>
-
-                      <div className="text-[10px] text-slate-400 space-y-0.5">
-                        <div className="truncate">Image: {p.image}</div>
-                        <div>IP: {p.ip || "10.244.0.5"}</div>
-                        {p.ownerRef && (
-                          <div className="text-purple-300 truncate">
-                            Owner: {p.ownerRef.name}
-                          </div>
-                        )}
-                      </div>
+                    <div className="text-[10px] text-emerald-400 mt-1">
+                      {Object.keys(cm.data || {}).length} keys mapped
                     </div>
-                  ))}
-                </div>
-              )}
+                  </div>
+                ))}
+                {clusterState.secrets.map((sec, i) => (
+                  <div
+                    key={i}
+                    className="rounded-lg bg-rose-950/30 border border-rose-800/50 p-2.5 text-rose-200"
+                  >
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <span>🔐</span>
+                      <span className="truncate">{sec.name}</span>
+                    </div>
+                    <div className="text-[10px] text-rose-400 mt-1">
+                      {sec.type} • {Object.keys(sec.data || {}).length || sec.dataKeys?.length || 0} base64 keys
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

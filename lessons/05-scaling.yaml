@@ -3,24 +3,34 @@ title: "Scaling with ReplicaSets"
 intro: |
   We've seen that Pods are ephemeral, and ReplicaSets ensure a specific number of them are always running for reliability.
   But what happens when traffic to your application spikes?
-  ReplicaSets make it trivial to scale your application horizontally up or down. By simply changing the "desired" number of replicas, the ReplicaSet controller will automatically create or terminate pods to match that target state. Let's see this in action.
+  ReplicaSets make it trivial to scale your application horizontally up or down. You can scale imperatively (`kubectl scale`) or declaratively (`vim replicaset.yaml` + `kubectl apply -f replicaset.yaml`). Let's see this in action.
   
 initialState:
   replicaSets:
     - name: frontend
       replicas: 3
+      image: nginx:latest
       selector:
         app: frontend
   pods:
     - name: frontend-a
+      image: nginx:latest
+      node: worker-node-1
+      ip: 10.244.1.21
       owner: frontend
       labels:
         app: frontend
     - name: frontend-b
+      image: nginx:latest
+      node: worker-node-2
+      ip: 10.244.2.22
       owner: frontend
       labels:
         app: frontend
     - name: frontend-c
+      image: nginx:latest
+      node: worker-node-1
+      ip: 10.244.1.23
       owner: frontend
       labels:
         app: frontend
@@ -28,32 +38,31 @@ initialState:
 steps:
   - type: explanation
     text: |
-      Currently, the `frontend` ReplicaSet is maintaining 3 pods. We anticipate a surge in traffic and need to increase our capacity to 5 pods.
+      Currently, the `frontend` ReplicaSet is maintaining 3 pods across worker nodes. We anticipate a surge in traffic and need to increase our capacity to 5 pods.
     behindTheScenes: |
       The kube-controller-manager is running a reconciliation loop for the frontend ReplicaSet. It continually checks the API server (reading from etcd) and sees that desired state (3) matches the actual state (3 pods match the selector).
 
   - type: challenge
-    prompt: "Scale the 'frontend' ReplicaSet up to 5 replicas to handle the incoming traffic."
-    hint: "kubectl scale rs frontend --replicas=5"
+    prompt: "Scale the 'frontend' ReplicaSet up to 5 replicas to handle incoming traffic. Use imperative `kubectl scale` or edit/apply `replicaset.yaml`."
+    hint: "kubectl scale rs frontend --replicas=5 (or: kubectl apply -f replicaset.yaml)"
     expected:
       verb: scale
       resource: replicaset
       name: frontend
     behindTheScenes: |
       You send an API request updating the ReplicaSet's desired replicas to 5 in etcd.
-      The ReplicaSet controller's watch triggers. It sees desired=5, actual=3.
-      It immediately sends requests to the API Server to create 2 new Pod objects.
-      The kube-scheduler detects unscheduled pods, assigns them to Nodes, and the respective kubelets start the containers.
+      The ReplicaSet controller detects desired=5, actual=3.
+      It immediately creates 2 new Pod objects.
+      The kube-scheduler detects unscheduled pods, balances them across worker-node-1 and worker-node-2, and the respective kubelets start the containers.
 
   - type: challenge
-    prompt: "Verify the scale-up by listing the pods. You should see 5 running."
-    hint: "kubectl get pods"
+    prompt: "Verify the scale-up across worker nodes by listing the pods with `-o wide`. You should see 5 running."
+    hint: "kubectl get pods -o wide (or: kubectl get pods)"
     expected:
       verb: get
       resource: pod
     behindTheScenes: |
-      The API Server fetches the 5 pod records from etcd and returns them to your client. 
-      Behind the scenes, the kubelets are constantly updating the API Server with the status of these pods.
+      The API Server fetches the 5 pod records from etcd and returns their IPs and host worker node bindings.
 
   - type: explanation
     text: |
@@ -71,8 +80,7 @@ steps:
     behindTheScenes: |
       The API Server updates etcd with desired=2.
       The ReplicaSet controller sees desired=2, actual=5.
-      It selects 3 pods (usually prioritizing unhealthy or newer pods) and issues delete requests to the API Server.
-      The API Server marks the pods for deletion. The kubelets on the respective nodes see this and terminate the containers gracefully.
+      It terminates 3 pods gracefully across the worker nodes.
       
   - type: explanation
     text: |
