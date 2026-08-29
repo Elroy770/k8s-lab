@@ -1,4 +1,4 @@
-id: 02-first-pod
+id: 01-first-pod
 title: "Your First Pod"
 intro: |
   In Kubernetes, the smallest and simplest deployable object is a Pod. 

@@ -13,6 +13,7 @@ import {
   CronJob,
   Namespace,
 } from "./cluster-state";
+import { DEFAULT_NODES, DEFAULT_VIRTUAL_FILES } from "./simulator";
 
 export interface VirtualFile {
   name: string;
@@ -219,6 +220,7 @@ export function applyYamlToCluster(
   state: ClusterState
 ): YamlApplyResult {
   const nextState: ClusterState = {
+    nodes: [...(state.nodes && state.nodes.length > 0 ? state.nodes : DEFAULT_NODES)],
     pods: [...(state.pods || [])],
     replicaSets: [...(state.replicaSets || [])],
     deployments: [...(state.deployments || [])],
@@ -230,6 +232,8 @@ export function applyYamlToCluster(
     namespaces: [...(state.namespaces || [])],
     configMaps: [...(state.configMaps || [])],
     secrets: [...(state.secrets || [])],
+    files: { ...(state.files || DEFAULT_VIRTUAL_FILES) },
+    lastActionImpact: state.lastActionImpact,
   };
 
   try {
@@ -675,6 +679,7 @@ export function deleteYamlFromCluster(
   state: ClusterState
 ): YamlApplyResult {
   const nextState: ClusterState = {
+    nodes: [...(state.nodes && state.nodes.length > 0 ? state.nodes : DEFAULT_NODES)],
     pods: [...(state.pods || [])],
     replicaSets: [...(state.replicaSets || [])],
     deployments: [...(state.deployments || [])],
@@ -686,6 +691,8 @@ export function deleteYamlFromCluster(
     namespaces: [...(state.namespaces || [])],
     configMaps: [...(state.configMaps || [])],
     secrets: [...(state.secrets || [])],
+    files: { ...(state.files || DEFAULT_VIRTUAL_FILES) },
+    lastActionImpact: state.lastActionImpact,
   };
 
   try {

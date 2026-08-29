@@ -1,44 +1,6 @@
 apiVersion: v1
 data:
-  01-kubernetes-architecture.yaml: |
-    id: 01-kubernetes-architecture
-    title: "Kubernetes Architecture"
-    intro: |
-      Welcome to Kubernetes!
-      Before diving into hands-on commands, it is crucial to understand the foundational architecture of the cluster.
-      Kubernetes is a powerful orchestration platform designed to automate the deployment, scaling, and operation of application containers across clusters of hosts.
-      The architecture is fundamentally divided into two major components: the Control Plane (the cluster's brain) and the Data Plane (the worker nodes where applications run).
-    steps:
-      - title: "The Control Plane"
-        type: explanation
-        text: |
-          **The Control Plane** is the central nervous system of your cluster.
-          It makes global decisions—such as assigning workloads to nodes—and detects and responds to cluster events (like starting up a new pod when a previous one crashes).
-        behindTheScenes: |
-          When the Control Plane operates, the following internal components interact:
-          - kube-apiserver: Acts as the primary entry point, validating and processing all requests.
-          - etcd: Serves as the ultimate source of truth, securely storing the entire cluster state.
-          - kube-scheduler: Continuously monitors the API server for unscheduled workloads and intelligently assigns them to optimal nodes.
-          - kube-controller-manager: Runs various control loops that constantly monitor the cluster's state via the API server, striving to match the current state to the desired state.
-          - kubelet, kube-proxy, and CRI: On the control plane nodes, these components might also run to manage the control plane's own containers, although their primary role shines in the Data Plane.
-
-      - title: "The Data Plane"
-        type: explanation
-        text: |
-          **The Data Plane** consists of the Worker Nodes. These are the machines that actually run your containerized applications and handle user traffic.
-        behindTheScenes: |
-          On every Worker Node, the following components ensure your applications run smoothly:
-          - kubelet: The primary node agent that communicates with the kube-apiserver to receive pod specifications and ensures their containers are healthy.
-          - CRI (Container Runtime Interface): Instructed by the kubelet, it pulls images and executes the actual containers (e.g., using containerd or CRI-O).
-          - kube-proxy: Manages node-level network routing, ensuring seamless communication to and from your pods.
-          - etcd, kube-scheduler, kube-controller-manager: These remain active on the Control Plane, constantly monitoring the status reported back by the kubelet.
-
-      - title: "Conclusion and Next Steps"
-        type: transition
-        text: "With a solid grasp of how the Control Plane and Worker Nodes interact, you are now ready to deploy your first application resource in the next lesson!"
-        behindTheScenes: |
-          The kube-apiserver stands ready to receive your commands. etcd is prepared to persist your configurations, while the kube-scheduler, kube-controller-manager, kubelet, kube-proxy, and CRI await instructions to bring your desired state to life.
-  02-first-pod.yaml: "id: 02-first-pod\ntitle: \"Your First Pod\"\nintro: |\n  In
+  01-first-pod.yaml: "id: 01-first-pod\ntitle: \"Your First Pod\"\nintro: |\n  In
     Kubernetes, the smallest and simplest deployable object is a Pod. \n  A Pod represents
     a single instance of a running process in your cluster, wrapping one or more tightly
     coupled containers.\n  Let's get our hands dirty and create your very first Pod!\nsteps:\n
