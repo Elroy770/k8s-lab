@@ -1,87 +1,531 @@
 {
-  "version": "1.0.0",
+  "version": "2.0.0",
+  "title": "KubeLab Academy",
   "phases": [
     {
-      "id": "phase-1",
-      "title": "Phase 1: Kubernetes Basics",
-      "description": "Build confidence with the Kubernetes API, Pods, and declarative resources.",
+      "id": "foundations",
+      "title": "Module 1: Cluster Foundations",
+      "description": "Learn the objects and discovery commands that every Kubernetes operator uses.",
       "quests": [
         {
           "id": "1.1",
-          "phaseId": "phase-1",
-          "title": "Inspect the cluster",
-          "description": "Start by listing the nodes and namespaces available to you.",
-          "hints": ["Use kubectl get with a resource name.", "Try: kubectl get nodes"],
-          "validation": {"commands": ["kubectl get nodes", "kubectl get namespace", "kubectl get namespaces", "kubectl get ns"]},
-          "simulatedOutput": "NAME     STATUS   ROLES           AGE   VERSION\nnode-01  Ready    control-plane   42d   v1.29.4\n\nNAME              STATUS   AGE\ndefault           Active   42d\nkube-system       Active   42d\nk8s-lab           Active   2d",
-          "expectedK8sStateUpdate": {"nodesInspected": true}
+          "phaseId": "foundations",
+          "title": "Discover your cluster",
+          "description": "Start with the broadest read-only check: list the nodes that make up the training cluster.",
+          "objective": "List Kubernetes nodes and identify their readiness state.",
+          "commandPreview": "kubectl get nodes",
+          "hints": [
+            "Use kubectl get followed by the plural resource name.",
+            "Nodes are cluster-scoped resources; no namespace flag is needed.",
+            "Run: kubectl get nodes"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl get nodes"
+            ]
+          },
+          "simulatedOutput": "NAME      STATUS   ROLES           AGE   VERSION\nnode-01   Ready    control-plane   42d   v1.29.4",
+          "expectedK8sStateUpdate": {
+            "nodesInspected": true
+          }
         },
         {
           "id": "1.2",
-          "phaseId": "phase-1",
-          "title": "Run a web Pod",
-          "description": "Create a small nginx Pod named web and let the scheduler place it.",
-          "hints": ["kubectl run creates a single Pod.", "The expected shape is kubectl run web --image=nginx"],
-          "validation": {"regex": "^kubectl\\s+run\\s+web\\s+--image(?:=\\s*|\\s+)nginx(?:(?:\\s+--restart=Never)?)\\s*$"},
-          "simulatedOutput": "pod/web created",
-          "expectedK8sStateUpdate": {"pods": [{"name": "web", "image": "nginx", "status": "Running"}]}
+          "phaseId": "foundations",
+          "title": "Explore namespaces",
+          "description": "List namespaces to see how Kubernetes separates system and application resources.",
+          "objective": "Display every namespace in the cluster.",
+          "commandPreview": "kubectl get namespaces",
+          "hints": [
+            "Namespaces are abbreviated as ns.",
+            "kubectl accepts both namespace and ns.",
+            "Run: kubectl get namespaces"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl get namespaces"
+            ]
+          },
+          "simulatedOutput": "NAME              STATUS   AGE\ndefault           Active   42d\nkube-system       Active   42d\nk8s-lab           Active   3d"
         },
         {
           "id": "1.3",
-          "phaseId": "phase-1",
-          "title": "Describe the Pod",
-          "description": "Inspect scheduling, networking, and container details for web.",
-          "hints": ["Describe is a read-only operation.", "Try kubectl describe pod web"],
-          "validation": {"commands": ["kubectl describe pod web"]},
-          "simulatedOutput": "Name:             web\nNamespace:        default\nStatus:            Running\nNode:              node-01/10.0.0.21\nIP:               10.244.0.12\nContainers:\n  nginx:\n    Image:          nginx\n    State:          Running\nEvents:\n  Normal  Scheduled  12s  default-scheduler  Successfully assigned default/web to node-01",
-          "expectedK8sStateUpdate": {"podInspected": "web"}
+          "phaseId": "foundations",
+          "title": "Inspect the API surface",
+          "description": "Use API discovery to see the resource types your kubectl client can work with.",
+          "objective": "List supported resource types from the API server.",
+          "commandPreview": "kubectl api-resources",
+          "hints": [
+            "kubectl includes a command specifically for API discovery.",
+            "This command does not need get.",
+            "Run: kubectl api-resources"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl api-resources"
+            ]
+          },
+          "simulatedOutput": "NAME                  SHORTNAMES   APIVERSION   NAMESPACED   KIND\npods                  po           v1           true         Pod\ndeployments           deploy       apps/v1      true         Deployment\nservices              svc          v1           true         Service\npersistentvolumeclaims pvc         v1           true         PersistentVolumeClaim"
+        },
+        {
+          "id": "1.4",
+          "phaseId": "foundations",
+          "title": "Read a Pod manifest",
+          "description": "Inspect a running Pod in YAML form so you can distinguish desired specification from observed status.",
+          "objective": "Request the web Pod as YAML.",
+          "commandPreview": "kubectl get pod web -o yaml",
+          "hints": [
+            "The -o flag changes kubectl output format.",
+            "YAML is requested with -o yaml.",
+            "Run: kubectl get pod web -o yaml"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl get pod web -o yaml"
+            ]
+          },
+          "simulatedOutput": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web\n  namespace: default\nspec:\n  containers:\n  - image: nginx:1.25\n    name: web\nstatus:\n  phase: Running"
         }
       ]
     },
     {
-      "id": "phase-2",
-      "title": "Phase 2: Storage & Persistence",
-      "description": "Learn how StorageClasses, PersistentVolumes, and PVCs give workloads durable data.",
+      "id": "workloads",
+      "title": "Module 2: Pods & Workloads",
+      "description": "Create Pods, then use controllers to keep application workloads available and scalable.",
       "quests": [
         {
           "id": "2.1",
-          "phaseId": "phase-2",
-          "title": "Inspect StorageClasses",
-          "description": "Discover the default storage class, then inspect its provisioner and binding mode.",
-          "hints": ["Use kubectl get sc to list classes.", "Then use kubectl describe sc standard."],
-          "validation": {"commands": ["kubectl get sc", "kubectl get storageclass", "kubectl describe sc standard", "kubectl describe storageclass standard"]},
-          "simulatedOutput": "NAME                 PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE\nstandard (default)   rancher.io/local-path   Delete          WaitForFirstConsumer   false                  42d\n\nName:            standard\nIsDefaultClass:  Yes\nProvisioner:     rancher.io/local-path\nVolumeBindingMode: WaitForFirstConsumer",
-          "expectedK8sStateUpdate": {"storageClassInspected": "standard"}
+          "phaseId": "workloads",
+          "title": "Create an nginx Pod",
+          "description": "Create a single Pod named web using the nginx image. This is useful for experimentation, but not for high availability.",
+          "objective": "Create the web Pod with kubectl run.",
+          "commandPreview": "kubectl run web --image=nginx",
+          "hints": [
+            "kubectl run creates a Pod when no restart policy is supplied.",
+            "The Pod name comes immediately after run.",
+            "Run: kubectl run web --image=nginx"
+          ],
+          "validation": {
+            "regex": "^kubectl\\s+run\\s+web\\s+--image(?:=|\\s+)nginx\\s*$"
+          },
+          "simulatedOutput": "pod/web created",
+          "expectedK8sStateUpdate": {
+            "pods": [
+              "web"
+            ]
+          }
         },
         {
           "id": "2.2",
-          "phaseId": "phase-2",
-          "title": "Create a PersistentVolumeClaim",
-          "description": "Request 1Gi of durable storage and verify that the claim reaches Bound status.",
-          "hints": ["You can apply a manifest: kubectl apply -f pvc.yaml.", "A command-line alternative is kubectl create -f pvc.yaml."],
-          "validation": {"regex": "^kubectl\\s+(?:apply|create)\\s+-f\\s+(?:\\.\\/)?pvc\\.yaml\\s*$"},
-          "simulatedOutput": "persistentvolumeclaim/app-data created\n\nNAME       STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE\napp-data   Bound    pvc-7c1a2d4e-9f40-4a1c-bc19-1a3f8f0c9c11   1Gi        RWO            standard       2s",
-          "expectedK8sStateUpdate": {"persistentVolumeClaims": [{"name": "app-data", "status": "Bound", "storageClass": "standard", "capacity": "1Gi"}], "persistentVolumes": [{"name": "pvc-7c1a2d4e-9f40-4a1c-bc19-1a3f8f0c9c11", "status": "Bound", "claim": "app-data"}]}
+          "phaseId": "workloads",
+          "title": "Inspect Pod health",
+          "description": "Read the current Pods and their phase before making a workload change.",
+          "objective": "List Pods in the current namespace.",
+          "commandPreview": "kubectl get pods",
+          "hints": [
+            "Pods have the short name po.",
+            "Use the plural resource name after get.",
+            "Run: kubectl get pods"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl get pods"
+            ]
+          },
+          "simulatedOutput": "NAME   READY   STATUS    RESTARTS   AGE\nweb    1/1     Running   0          20s"
         },
         {
           "id": "2.3",
-          "phaseId": "phase-2",
-          "title": "Mount a PVC to a Pod",
-          "description": "Inspect storage-pod and confirm that app-data is mounted at /var/lib/app.",
-          "hints": ["Use kubectl describe pod storage-pod.", "Look for Volumes and Mounts in the output."],
-          "validation": {"commands": ["kubectl describe pod storage-pod"]},
-          "simulatedOutput": "Name:             storage-pod\nNamespace:        default\nStatus:           Running\nContainers:\n  app:\n    Image:          nginx:1.25\n    Mounts:\n      /var/lib/app from app-data (rw)\nVolumes:\n  app-data:\n    Type:       PersistentVolumeClaim\n    ClaimName:  app-data\n    ReadOnly:   false\nEvents:\n  Normal  SuccessfulAttachVolume  8s  kubelet  AttachVolume.Attach succeeded for volume app-data",
-          "expectedK8sStateUpdate": {"pods": [{"name": "storage-pod", "status": "Running", "mountedClaims": ["app-data"]}]}
+          "phaseId": "workloads",
+          "title": "Deploy a web application",
+          "description": "Apply the provided Deployment manifest. A Deployment owns ReplicaSets and enables controlled rollout behavior.",
+          "objective": "Create the web Deployment from a manifest.",
+          "commandPreview": "kubectl apply -f deployment.yaml",
+          "hints": [
+            "Declarative resources are usually created with kubectl apply.",
+            "The supplied manifest filename is deployment.yaml.",
+            "Run: kubectl apply -f deployment.yaml"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl apply -f deployment.yaml"
+            ]
+          },
+          "simulatedOutput": "deployment.apps/web configured",
+          "expectedK8sStateUpdate": {
+            "deployments": [
+              "web"
+            ]
+          }
         },
         {
           "id": "2.4",
-          "phaseId": "phase-2",
-          "title": "Troubleshoot a Pending PVC",
-          "description": "A claim is Pending because it requests a non-existent storage class. Diagnose it with describe, then fix the manifest by applying pvc-fixed.yaml.",
-          "hints": ["First inspect events with kubectl describe pvc stuck-data.", "The repaired manifest uses storageClassName: standard."],
-          "validation": {"commands": ["kubectl describe pvc stuck-data", "kubectl apply -f pvc-fixed.yaml", "kubectl apply --filename=pvc-fixed.yaml"]},
-          "simulatedOutput": "Name:          stuck-data\nStatus:        Pending\nStorageClass:  fast-ssd\nEvents:\n  Warning  ProvisioningFailed  18s  persistentvolume-controller  storageclass.storage.k8s.io \"fast-ssd\" not found\n\n# After applying pvc-fixed.yaml\npersistentvolumeclaim/stuck-data configured\nNAME         STATUS   VOLUME                                     CAPACITY   STORAGECLASS\nstuck-data   Bound    pvc-3bfc9a1d-2d40-4c69-8c9d-4a3c1af8f921   2Gi        standard",
-          "expectedK8sStateUpdate": {"persistentVolumeClaims": [{"name": "stuck-data", "status": "Bound", "storageClass": "standard", "capacity": "2Gi"}], "troubleshootingComplete": true}
+          "phaseId": "workloads",
+          "title": "Scale a Deployment",
+          "description": "Increase the web Deployment to three replicas and let the controller reconcile the desired count.",
+          "objective": "Scale web to three replicas.",
+          "commandPreview": "kubectl scale deployment web --replicas=3",
+          "hints": [
+            "kubectl scale accepts a resource type and resource name.",
+            "The desired number uses the --replicas flag.",
+            "Run: kubectl scale deployment web --replicas=3"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl scale deployment web --replicas=3"
+            ]
+          },
+          "simulatedOutput": "deployment.apps/web scaled\n\nNAME   READY   UP-TO-DATE   AVAILABLE   AGE\nweb    3/3     3            3           2m",
+          "expectedK8sStateUpdate": {
+            "webReplicas": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "configuration",
+      "title": "Module 3: Configuration & Security",
+      "description": "Separate configuration and credentials from container images, then examine access control.",
+      "quests": [
+        {
+          "id": "3.1",
+          "phaseId": "configuration",
+          "title": "Inspect ConfigMaps",
+          "description": "List ConfigMaps to identify non-sensitive configuration available to workloads.",
+          "objective": "List ConfigMaps in the namespace.",
+          "commandPreview": "kubectl get configmaps",
+          "hints": [
+            "ConfigMap has the short name cm.",
+            "Use the plural resource name after get.",
+            "Run: kubectl get configmaps"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl get configmaps"
+            ]
+          },
+          "simulatedOutput": "NAME             DATA   AGE\napp-settings     3      1d\nkube-root-ca.crt 1      42d"
+        },
+        {
+          "id": "3.2",
+          "phaseId": "configuration",
+          "title": "Create application configuration",
+          "description": "Create a ConfigMap called app-settings from literal key/value pairs.",
+          "objective": "Create app-settings with LOG_LEVEL=info.",
+          "commandPreview": "kubectl create configmap app-settings --from-literal=LOG_LEVEL=info",
+          "hints": [
+            "kubectl create configmap supports literal data.",
+            "The key/value is supplied with --from-literal=KEY=VALUE.",
+            "Run: kubectl create configmap app-settings --from-literal=LOG_LEVEL=info"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl create configmap app-settings --from-literal=LOG_LEVEL=info"
+            ]
+          },
+          "simulatedOutput": "configmap/app-settings created",
+          "expectedK8sStateUpdate": {
+            "configMaps": [
+              "app-settings"
+            ]
+          }
+        },
+        {
+          "id": "3.3",
+          "phaseId": "configuration",
+          "title": "Inspect a Secret safely",
+          "description": "Describe the database Secret without printing its decoded values.",
+          "objective": "Describe the db-credentials Secret.",
+          "commandPreview": "kubectl describe secret db-credentials",
+          "hints": [
+            "Describe shows metadata and key names, not secret values.",
+            "The resource is singular: secret.",
+            "Run: kubectl describe secret db-credentials"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl describe secret db-credentials"
+            ]
+          },
+          "simulatedOutput": "Name:         db-credentials\nNamespace:    default\nType:         Opaque\nData\n====\npassword:  16 bytes\nusername:  5 bytes"
+        },
+        {
+          "id": "3.4",
+          "phaseId": "configuration",
+          "title": "Check your authorization",
+          "description": "Ask the API server whether the current identity may list Pods.",
+          "objective": "Test RBAC permission to list Pods.",
+          "commandPreview": "kubectl auth can-i list pods",
+          "hints": [
+            "kubectl auth can-i tests an RBAC action without changing state.",
+            "Use a verb first, then the resource.",
+            "Run: kubectl auth can-i list pods"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl auth can-i list pods"
+            ]
+          },
+          "simulatedOutput": "yes"
+        }
+      ]
+    },
+    {
+      "id": "storage",
+      "title": "Module 4: Storage & Persistence",
+      "description": "Provision durable storage with StorageClasses and PVCs, then diagnose a common provisioning failure.",
+      "quests": [
+        {
+          "id": "4.1",
+          "phaseId": "storage",
+          "title": "Inspect StorageClasses",
+          "description": "Find the default dynamic provisioner and understand how it binds volumes.",
+          "objective": "List StorageClasses.",
+          "commandPreview": "kubectl get storageclasses",
+          "hints": [
+            "StorageClass is abbreviated sc.",
+            "The default class is marked in the NAME column.",
+            "Run: kubectl get storageclasses"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl get storageclasses"
+            ]
+          },
+          "simulatedOutput": "NAME                 PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE\nstandard (default)   rancher.io/local-path   Delete          WaitForFirstConsumer"
+        },
+        {
+          "id": "4.2",
+          "phaseId": "storage",
+          "title": "Describe the default class",
+          "description": "Inspect the standard StorageClass to confirm the provisioner and volume-binding behavior.",
+          "objective": "Describe the standard StorageClass.",
+          "commandPreview": "kubectl describe storageclass standard",
+          "hints": [
+            "Use describe for detailed resource metadata.",
+            "StorageClass is cluster-scoped, so omit -n.",
+            "Run: kubectl describe storageclass standard"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl describe storageclass standard"
+            ]
+          },
+          "simulatedOutput": "Name:            standard\nIsDefaultClass:  Yes\nProvisioner:     rancher.io/local-path\nReclaimPolicy:   Delete\nVolumeBindingMode: WaitForFirstConsumer"
+        },
+        {
+          "id": "4.3",
+          "phaseId": "storage",
+          "title": "Provision a PVC",
+          "description": "Apply the PVC manifest and request 1Gi of persistent storage for the application.",
+          "objective": "Create the app-data PersistentVolumeClaim.",
+          "commandPreview": "kubectl apply -f pvc.yaml",
+          "hints": [
+            "PVC manifests declare storage requirements, not a backing disk name.",
+            "Use apply so the command can safely be repeated.",
+            "Run: kubectl apply -f pvc.yaml"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl apply -f pvc.yaml"
+            ]
+          },
+          "simulatedOutput": "persistentvolumeclaim/app-data created\n\nNAME       STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS\napp-data   Bound    pvc-7c1a2d4e-9f40-4a1c-bc19-1a3f8f0c9c11   1Gi        RWO            standard",
+          "expectedK8sStateUpdate": {
+            "pvcs": [
+              "app-data"
+            ]
+          }
+        },
+        {
+          "id": "4.4",
+          "phaseId": "storage",
+          "title": "Diagnose a Pending claim",
+          "description": "Inspect stuck-data to find why provisioning failed before applying the corrected claim manifest.",
+          "objective": "Describe the Pending PersistentVolumeClaim.",
+          "commandPreview": "kubectl describe pvc stuck-data",
+          "hints": [
+            "PVC is the short name for PersistentVolumeClaim.",
+            "The Events section usually gives the root cause.",
+            "Run: kubectl describe pvc stuck-data"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl describe pvc stuck-data"
+            ]
+          },
+          "simulatedOutput": "Name:          stuck-data\nStatus:        Pending\nStorageClass:  fast-ssd\nEvents:\n  Warning  ProvisioningFailed  persistentvolume-controller  storageclass.storage.k8s.io \"fast-ssd\" not found"
+        }
+      ]
+    },
+    {
+      "id": "networking",
+      "title": "Module 5: Networking & Services",
+      "description": "Expose Pods internally and externally, then inspect the endpoints selected by a Service.",
+      "quests": [
+        {
+          "id": "5.1",
+          "phaseId": "networking",
+          "title": "Inspect Pod IPs",
+          "description": "List Pods with node and IP information before creating a Service selector.",
+          "objective": "List Pods using wide output.",
+          "commandPreview": "kubectl get pods -o wide",
+          "hints": [
+            "The normal Pod list hides networking information.",
+            "Use the -o wide output option.",
+            "Run: kubectl get pods -o wide"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl get pods -o wide"
+            ]
+          },
+          "simulatedOutput": "NAME       READY   STATUS    IP            NODE\nweb-abc    1/1     Running   10.244.0.12   node-01\nweb-def    1/1     Running   10.244.0.13   node-01"
+        },
+        {
+          "id": "5.2",
+          "phaseId": "networking",
+          "title": "Create a ClusterIP Service",
+          "description": "Expose the web Deployment inside the cluster on port 80 using its app=web label.",
+          "objective": "Create the web Service declaratively.",
+          "commandPreview": "kubectl apply -f service.yaml",
+          "hints": [
+            "A Service selects Pods through labels.",
+            "The provided manifest is named service.yaml.",
+            "Run: kubectl apply -f service.yaml"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl apply -f service.yaml"
+            ]
+          },
+          "simulatedOutput": "service/web created",
+          "expectedK8sStateUpdate": {
+            "services": [
+              "web"
+            ]
+          }
+        },
+        {
+          "id": "5.3",
+          "phaseId": "networking",
+          "title": "Verify Service endpoints",
+          "description": "Confirm the web Service selected healthy backend Pod IPs.",
+          "objective": "Inspect EndpointSlices for the web Service.",
+          "commandPreview": "kubectl get endpointslices",
+          "hints": [
+            "Modern Kubernetes represents backends as EndpointSlice resources.",
+            "This command shows the IPs selected by Services.",
+            "Run: kubectl get endpointslices"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl get endpointslices"
+            ]
+          },
+          "simulatedOutput": "NAME             ADDRESSTYPE   PORTS   ENDPOINTS                 AGE\nweb-7qpk8        IPv4          80      10.244.0.12,10.244.0.13  10s"
+        },
+        {
+          "id": "5.4",
+          "phaseId": "networking",
+          "title": "Inspect an Ingress",
+          "description": "Describe the web Ingress to understand host and path routing at the edge.",
+          "objective": "Describe the web Ingress.",
+          "commandPreview": "kubectl describe ingress web",
+          "hints": [
+            "Ingress is an HTTP routing resource, not a Service type.",
+            "Describe includes the host, paths, and backend Service.",
+            "Run: kubectl describe ingress web"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl describe ingress web"
+            ]
+          },
+          "simulatedOutput": "Name:             web\nIngress Class:    nginx\nRules:\n  Host              Path  Backends\n  app.example.test  /     web:80 (10.244.0.12:80,10.244.0.13:80)"
+        }
+      ]
+    },
+    {
+      "id": "operations",
+      "title": "Module 6: Operations & Troubleshooting",
+      "description": "Use events, logs, rollout status, and resource usage to operate workloads with confidence.",
+      "quests": [
+        {
+          "id": "6.1",
+          "phaseId": "operations",
+          "title": "Review recent events",
+          "description": "Sort events by timestamp to see the latest scheduling and controller activity first.",
+          "objective": "Display namespace events in time order.",
+          "commandPreview": "kubectl get events --sort-by=.metadata.creationTimestamp",
+          "hints": [
+            "Events explain what Kubernetes did and why.",
+            "The --sort-by field can order output by metadata.creationTimestamp.",
+            "Run: kubectl get events --sort-by=.metadata.creationTimestamp"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl get events --sort-by=.metadata.creationTimestamp"
+            ]
+          },
+          "simulatedOutput": "LAST SEEN   TYPE     REASON    OBJECT             MESSAGE\n14s         Normal   Scheduled pod/web-abc        Successfully assigned default/web-abc to node-01\n11s         Normal   Pulled    pod/web-abc        Container image \"nginx:1.25\" already present"
+        },
+        {
+          "id": "6.2",
+          "phaseId": "operations",
+          "title": "Read application logs",
+          "description": "Retrieve the current logs from the web Pod to inspect application behavior.",
+          "objective": "Print logs from web-abc.",
+          "commandPreview": "kubectl logs web-abc",
+          "hints": [
+            "Logs are collected from a container in a Pod.",
+            "For a single-container Pod, the container name is optional.",
+            "Run: kubectl logs web-abc"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl logs web-abc"
+            ]
+          },
+          "simulatedOutput": "/docker-entrypoint.sh: Configuration complete; ready for start up\n2026/08/30 11:30:04 [notice] 1#1: nginx/1.25.4\n2026/08/30 11:30:04 [notice] 1#1: start worker processes"
+        },
+        {
+          "id": "6.3",
+          "phaseId": "operations",
+          "title": "Watch a rollout",
+          "description": "Wait for the web Deployment rollout to report that all desired replicas are available.",
+          "objective": "Check rollout status for web.",
+          "commandPreview": "kubectl rollout status deployment web",
+          "hints": [
+            "kubectl rollout has commands for status, history, undo, and restart.",
+            "Provide the resource and name after status.",
+            "Run: kubectl rollout status deployment web"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl rollout status deployment web"
+            ]
+          },
+          "simulatedOutput": "deployment \"web\" successfully rolled out"
+        },
+        {
+          "id": "6.4",
+          "phaseId": "operations",
+          "title": "Inspect resource consumption",
+          "description": "Read live CPU and memory usage reported for Pods by metrics-server.",
+          "objective": "Show current Pod CPU and memory usage.",
+          "commandPreview": "kubectl top pods",
+          "hints": [
+            "kubectl top queries the metrics API rather than Pod status.",
+            "Use the plural resource after top.",
+            "Run: kubectl top pods"
+          ],
+          "validation": {
+            "commands": [
+              "kubectl top pods"
+            ]
+          },
+          "simulatedOutput": "NAME      CPU(cores)   MEMORY(bytes)\nweb-abc   3m           18Mi\nweb-def   2m           17Mi"
         }
       ]
     }

@@ -3,32 +3,32 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b0f14">
-  <title>KubeLab — Kubernetes Simulator</title>
+  <meta name="theme-color" content="#0d1117">
+  <title>KubeLab Academy — Kubernetes Simulator</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark">⌘</span><span>Kube<span class="accent">Lab</span></span><small>TRAINING SIMULATOR</small></div>
-    <div class="cluster-pill"><span class="status-dot"></span> cluster: <strong>k8s-lab</strong> <span class="divider"></span> <span class="muted">student session</span></div>
+    <a class="brand" href="#" aria-label="KubeLab Academy home"><span class="brand-mark">⬡</span><span>KubeLab <b>Academy</b></span></a>
+    <div class="topbar-center"><span class="environment"><i></i> Training cluster</span><span class="slash">/</span><span>k8s-lab</span></div>
+    <div class="topbar-actions"><button class="text-button" id="reset-btn" title="Reset all course progress">Reset progress</button><span class="student-chip">STUDENT</span></div>
   </header>
-  <main class="workspace">
-    <aside class="syllabus" aria-label="Course syllabus">
-      <div class="pane-heading"><div><span class="eyebrow">COURSE SYLLABUS</span><h1>Core Kubernetes</h1></div><span class="progress" id="progress">0 / 7</span></div>
-      <label class="select-label" for="phase-select">MODULE / PHASE</label>
-      <select id="phase-select" aria-label="Select a course phase"></select>
-      <div id="phase-description" class="phase-description"></div>
-      <nav id="quest-list" class="quest-list" aria-label="Quests"></nav>
-      <div class="cluster-state"><div class="eyebrow">VIRTUAL CLUSTER</div><div id="state-summary" class="state-summary"></div></div>
+  <main class="app-shell">
+    <aside class="course-nav" aria-label="Course navigation">
+      <section class="course-summary"><div class="eyebrow">LEARNING PATH</div><h1>Kubernetes Operator Foundations</h1><p>Learn the practical command line skills used to build, operate, and troubleshoot workloads.</p><div class="progress-track"><span id="progress-bar"></span></div><div class="progress-caption"><span id="progress-label">0 of 0 labs complete</span><strong id="progress-percent">0%</strong></div></section>
+      <section class="module-picker"><label for="phase-select">CURRENT MODULE</label><select id="phase-select" aria-label="Select curriculum module"></select></section>
+      <nav id="quest-list" class="quest-list" aria-label="Labs in current module"></nav>
+      <footer class="nav-footer"><span>⌘</span> Simulator mode · no live cluster access</footer>
     </aside>
-    <section class="lesson-panel">
-      <div id="lesson-content"></div>
+    <section class="lesson-panel" aria-label="Lesson workspace">
+      <div class="breadcrumb"><span id="phase-breadcrumb">Module</span><span>›</span><span id="quest-breadcrumb">Lab</span></div>
+      <article id="lesson-content"></article>
     </section>
     <section class="terminal-panel" aria-label="Interactive terminal">
-      <div class="terminal-header"><div class="terminal-tabs"><span class="tab active"><span class="tab-dot"></span> lab-terminal</span></div><div class="terminal-actions"><button id="clear-btn" title="Clear terminal">clear</button><button id="help-btn" title="Show help">help</button></div></div>
+      <header class="terminal-header"><div class="terminal-title"><span class="terminal-icon">›_</span><span>Integrated Terminal</span><span class="terminal-session">bash</span></div><div class="terminal-actions"><button id="clear-btn" title="Clear terminal output">Clear</button><button id="help-btn" title="Terminal help">Help</button></div></header>
       <div id="terminal-output" class="terminal-output" role="log" aria-live="polite"></div>
-      <form id="terminal-form" class="terminal-form"><span class="prompt">student@k8s-lab:~$</span><input id="command-input" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Terminal command"><span class="cursor"></span></form>
-      <div class="terminal-footer"><span><span class="green">●</span> simulator ready</span><span>↑↓ history&nbsp;&nbsp; <kbd>Ctrl</kbd> + <kbd>L</kbd> clear</span></div>
+      <form id="terminal-form" class="terminal-form"><span class="prompt"><b>student</b>@k8s-lab:~$</span><input id="command-input" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Type a kubectl command"><span class="cursor" aria-hidden="true"></span></form>
+      <footer class="terminal-footer"><span><i></i> Ready</span><span><kbd>↑</kbd><kbd>↓</kbd> history &nbsp; <kbd>Ctrl</kbd> <kbd>L</kbd> clear</span></footer>
     </section>
   </main>
   <script type="module" src="app.js"></script>
