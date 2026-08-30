@@ -31,11 +31,16 @@ function renderNavigation() {
   $('#quest-list').innerHTML = phase.quests.map((quest, index) => `<button class="quest-item ${state.questIndex === index ? 'active' : ''} ${state.completed.has(quest.id) ? 'done' : ''}" data-quest="${index}"><span class="quest-num">${escapeHtml(quest.id)}</span><span>${escapeHtml(quest.title)}</span></button>`).join('');
   $('#quest-list').querySelectorAll('button').forEach((button) => button.addEventListener('click', () => { state.questIndex = Number(button.dataset.quest); state.visibleHints = 1; render(); }));
   const completed = state.completed.size; const total = totalLabs(); const percentage = Math.round((completed / total) * 100);
-  $('#progress-bar').style.width = `${percentage}%`; $('#progress-label').textContent = `${completed} of ${total} labs complete`; $('#progress-percent').textContent = `${percentage}%`;
+  const progressBar = $('#progress-bar'); const progressLabel = $('#progress-label'); const progressPercent = $('#progress-percent');
+  if (progressBar) progressBar.style.width = `${percentage}%`;
+  if (progressLabel) progressLabel.textContent = `${completed} of ${total} labs complete`;
+  if (progressPercent) progressPercent.textContent = `${percentage}%`;
 }
 function renderLesson() {
   const phase = currentPhase(); const quest = currentQuest(); const completed = state.completed.has(quest.id); const shownHints = quest.hints.slice(0, state.visibleHints);
-  $('#phase-breadcrumb').textContent = phase.title; $('#quest-breadcrumb').textContent = `Lab ${quest.id}`;
+  const phaseBreadcrumb = $('#phase-breadcrumb'); const questBreadcrumb = $('#quest-breadcrumb');
+  if (phaseBreadcrumb) phaseBreadcrumb.textContent = phase.title;
+  if (questBreadcrumb) questBreadcrumb.textContent = `Lab ${quest.id}`;
   $('#lesson-content').innerHTML = `<div class="lab-kicker"><span class="badge">LAB ${escapeHtml(quest.id)}</span><span>${escapeHtml(phase.title)}</span></div><h2>${escapeHtml(quest.title)}</h2><p class="lesson-description">${escapeHtml(quest.description)}</p><section class="objective-card"><div class="card-label">MISSION</div><p>${escapeHtml(quest.objective || 'Use the terminal to run the required kubectl command.')}</p>${quest.commandPreview ? `<code class="command-preview">${escapeHtml(quest.commandPreview)}</code>` : ''}</section><section class="hint-section"><div class="hint-heading"><span>Guided hints · ${Math.min(state.visibleHints, quest.hints.length)} of ${quest.hints.length}</span>${state.visibleHints < quest.hints.length ? '<button id="more-hints" type="button">Reveal next hint</button>' : ''}</div><div class="hint-list">${shownHints.map((hint, index) => `<div class="hint"><b>Hint ${index + 1}.</b> ${escapeHtml(hint)}</div>`).join('')}</div></section><div class="success-card ${completed ? '' : 'hidden'}"><span class="check">✓</span><span><b>Lab complete.</b><br>Your command was accepted by the simulator and the virtual cluster state was updated.</span>${nextQuest() ? '<button class="next-lab" id="next-lab">Next lab →</button>' : ''}</div>`;
   $('#more-hints')?.addEventListener('click', () => { state.visibleHints += 1; renderLesson(); });
   $('#next-lab')?.addEventListener('click', () => { advanceQuest(); });

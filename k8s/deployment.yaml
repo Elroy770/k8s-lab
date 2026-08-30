@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: k8s-story-lab
-          image: elroymalayov/k8s-lab:belshy-v2
+          image: elroymalayov/k8s-lab:belshy-v3
           imagePullPolicy: Always
           ports:
             - name: http
