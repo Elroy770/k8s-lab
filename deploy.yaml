@@ -36,8 +36,47 @@ spec:
             periodSeconds: 20
           resources:
             requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
               memory: "128Mi"
               cpu: "100m"
-            limits:
-              memory: "256Mi"
-              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k8s-story-lab-service
+  namespace: k8s-lab
+spec:
+  selector:
+    app: k8s-story-lab
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: k8s-story-lab-ingress
+  namespace: k8s-lab
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - k8s.elroy.site
+      secretName: k8s-story-lab-tls
+  rules:
+    - host: k8s.elroy.site
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: k8s-story-lab-service
+                port:
+                  name: http

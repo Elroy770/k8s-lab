@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0f14">
+  <title>KubeLab — Kubernetes Simulator</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">⌘</span><span>Kube<span class="accent">Lab</span></span><small>TRAINING SIMULATOR</small></div>
+    <div class="cluster-pill"><span class="status-dot"></span> cluster: <strong>k8s-lab</strong> <span class="divider"></span> <span class="muted">student session</span></div>
+  </header>
+  <main class="workspace">
+    <aside class="syllabus" aria-label="Course syllabus">
+      <div class="pane-heading"><div><span class="eyebrow">COURSE SYLLABUS</span><h1>Core Kubernetes</h1></div><span class="progress" id="progress">0 / 7</span></div>
+      <label class="select-label" for="phase-select">MODULE / PHASE</label>
+      <select id="phase-select" aria-label="Select a course phase"></select>
+      <div id="phase-description" class="phase-description"></div>
+      <nav id="quest-list" class="quest-list" aria-label="Quests"></nav>
+      <div class="cluster-state"><div class="eyebrow">VIRTUAL CLUSTER</div><div id="state-summary" class="state-summary"></div></div>
+    </aside>
+    <section class="lesson-panel">
+      <div id="lesson-content"></div>
+    </section>
+    <section class="terminal-panel" aria-label="Interactive terminal">
+      <div class="terminal-header"><div class="terminal-tabs"><span class="tab active"><span class="tab-dot"></span> lab-terminal</span></div><div class="terminal-actions"><button id="clear-btn" title="Clear terminal">clear</button><button id="help-btn" title="Show help">help</button></div></div>
+      <div id="terminal-output" class="terminal-output" role="log" aria-live="polite"></div>
+      <form id="terminal-form" class="terminal-form"><span class="prompt">student@k8s-lab:~$</span><input id="command-input" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Terminal command"><span class="cursor"></span></form>
+      <div class="terminal-footer"><span><span class="green">●</span> simulator ready</span><span>↑↓ history&nbsp;&nbsp; <kbd>Ctrl</kbd> + <kbd>L</kbd> clear</span></div>
+    </section>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
