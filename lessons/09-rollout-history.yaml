@@ -1,0 +1,59 @@
+id: rollout-history
+chapter: Workloads
+title: The Cluster Remembers
+concept: Revisions and rollout history
+
+intro: |
+  Every change to a Deployment's Pod template creates a new revision, and the
+  ReplicaSet behind the old revision is kept around.
+
+  Your `web` Deployment has already been through one release.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 3
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+      previousImages:
+        - nginx:1.21
+
+steps:
+  - type: challenge
+    prompt: Show the revision history of the Deployment.
+    hint: kubectl rollout history deployment/web
+    expected:
+      verb: rollout
+      subcommand: history
+      resource: deployments
+    reveal: Revision 1 was nginx:1.21. Revision 2 is what you are running.
+
+  - type: challenge
+    prompt: Look at the Deployment in detail — which ReplicaSet is current?
+    hint: kubectl describe deployment web
+    expected:
+      verb: describe
+      resource: deployments
+      name: web
+    reveal: NewReplicaSet has the replicas; OldReplicaSets are parked at 0.
+
+  - type: challenge
+    prompt: Confirm the old ReplicaSet is still on the cluster.
+    hint: kubectl get rs
+    expected:
+      verb: get
+      resource: replicasets
+
+  - type: explanation
+    text: |
+      Revision history is not a log file — it is real, live objects. Each old
+      ReplicaSet still holds a complete Pod template.
+
+      Rolling back is therefore not a rebuild. It is scaling an object that
+      already exists back up.
+
+  - type: transition
+    text: |
+      So let's earn a rollback the hard way: ship something broken.

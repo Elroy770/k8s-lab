@@ -1,0 +1,124 @@
+id: startup-probes
+chapter: Health
+title: Slow Starters
+concept: Startup probes
+
+intro: |
+  Legacy applications sometimes need a minute before they answer anything. A
+  liveness probe will happily kill them halfway through booting, forever.
+
+  The startup probe exists to hold the liveness probe back.
+
+files:
+  slow.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: legacy
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: legacy
+      template:
+        metadata:
+          labels:
+            app: legacy
+        spec:
+          containers:
+            - name: app
+              image: httpd:2.4
+              startupProbe:
+                httpGet:
+                  path: /boot-complete
+                  port: 80
+                failureThreshold: 30
+              livenessProbe:
+                httpGet:
+                  path: /healthz
+                  port: 80
+  fixed.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: legacy
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: legacy
+      template:
+        metadata:
+          labels:
+            app: legacy
+        spec:
+          containers:
+            - name: app
+              image: httpd:2.4
+              startupProbe:
+                httpGet:
+                  path: /healthz
+                  port: 80
+                failureThreshold: 30
+              livenessProbe:
+                httpGet:
+                  path: /healthz
+                  port: 80
+
+steps:
+  - type: challenge
+    prompt: Deploy the legacy app with a startup probe on /boot-complete.
+    hint: kubectl apply -f slow.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: slow.yaml
+
+  - type: challenge
+    prompt: Check the Pod.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: It never reaches Running - the container is restarted before it starts.
+
+  - type: challenge
+    prompt: Read the reason.
+    hint: "kubectl describe pod <paste-a-pod-name>"
+    expected:
+      verb: describe
+      resource: pods
+    reveal: "Startup probe failed - so the container is never declared started."
+
+  - type: challenge
+    prompt: Point the startup probe at a path the app really serves.
+    hint: kubectl apply -f fixed.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: fixed.yaml
+
+  - type: challenge
+    prompt: Confirm it comes up.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: Running and Ready.
+
+  - type: explanation
+    text: |
+      The order of operations for a container:
+
+          startup probe   runs first, alone.
+                          liveness and readiness are disabled until it passes.
+          ↓ succeeds once
+          liveness + readiness take over for the rest of the container's life
+
+      `failureThreshold × periodSeconds` on the startup probe is your entire
+      boot budget. That is the clean way to give an app five minutes to start
+      without also giving it five minutes to hang later.
+
+  - type: transition
+    text: |
+      Enough long-running servers. Some workloads are supposed to finish.

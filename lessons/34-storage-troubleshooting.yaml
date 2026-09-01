@@ -1,0 +1,133 @@
+id: storage-troubleshooting
+chapter: Storage
+title: The Pod That Will Not Start
+concept: Debugging storage
+
+intro: |
+  A teammate deployed a reporting service last night. It has never started and
+  the Deployment shows 0 available.
+
+  Nothing about the image or the nodes is wrong.
+
+initialState:
+  storageClasses:
+    - name: standard
+      provisioner: lab.local/dynamic
+      isDefault: true
+  persistentVolumeClaims:
+    - name: reports-data
+      requestGi: 5
+      accessModes:
+        - ReadWriteOnce
+      storageClass: fast-nvme
+  deployments:
+    - name: reports
+      replicas: 1
+      template:
+        image: nginx:1.22
+        labels:
+          app: reports
+        volumes:
+          - name: data
+            kind: persistentVolumeClaim
+            source: reports-data
+        mounts:
+          - name: data
+            mountPath: /data
+
+files:
+  fixed-claim.yaml: |
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: reports-data
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      storageClassName: standard
+      resources:
+        requests:
+          storage: 5Gi
+
+steps:
+  - type: challenge
+    prompt: Start where you always start - what state is the Pod in?
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: Pending, and it has been Pending for a long time.
+
+  - type: challenge
+    prompt: Ask the Pod why it is stuck.
+    hint: "kubectl describe pod <paste-a-pod-name>"
+    expected:
+      verb: describe
+      resource: pods
+    reveal: It is waiting for a PersistentVolumeClaim to bind.
+
+  - type: challenge
+    prompt: Follow the trail to the claim.
+    hint: kubectl get pvc
+    expected:
+      verb: get
+      resource: persistentvolumeclaims
+    reveal: "Pending, storage class `fast-nvme`."
+
+  - type: challenge
+    prompt: Ask the claim for the reason.
+    hint: kubectl describe pvc reports-data
+    expected:
+      verb: describe
+      resource: persistentvolumeclaims
+      name: reports-data
+
+  - type: challenge
+    prompt: Check which storage classes actually exist here.
+    hint: kubectl get sc
+    expected:
+      verb: get
+      resource: storageclasses
+    reveal: "Only `standard`. `fast-nvme` was a typo - or a class from another cluster."
+
+  - type: challenge
+    prompt: A claim's storage class cannot be edited. Delete it.
+    hint: kubectl delete pvc reports-data
+    expected:
+      verb: delete
+      resource: persistentvolumeclaims
+      name: reports-data
+
+  - type: challenge
+    prompt: Recreate it against a class that exists.
+    hint: kubectl apply -f fixed-claim.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: fixed-claim.yaml
+
+  - type: challenge
+    prompt: Confirm the whole chain recovered.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: The Pod scheduled and started on its own once the claim bound.
+
+  - type: explanation
+    text: |
+      Storage problems always surface as a Pod that never leaves Pending, and
+      the reason is never in the Pod itself. The chain to walk is short:
+
+          Pod Pending
+            -> describe pod        (which claim is it waiting for?)
+            -> get/describe pvc    (why is the claim not Bound?)
+            -> get sc / get pv     (is there anything that could satisfy it?)
+
+      The four usual causes: a storage class that does not exist, no volume
+      matching the access mode, a request bigger than any available volume, or
+      no default class when the claim did not name one.
+
+  - type: transition
+    text: |
+      Storage decides *if* a Pod can run. Next: deciding *where*.

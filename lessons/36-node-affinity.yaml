@@ -1,0 +1,143 @@
+id: node-affinity
+chapter: Scheduling
+title: Required, or Merely Preferred
+concept: Node affinity
+
+intro: |
+  Node affinity replaces exact matching with expressions, and adds the
+  distinction that matters most in production: hard rules versus soft ones.
+
+initialState:
+  nodes:
+    - name: worker-3
+      labels:
+        zone: eu-west-1c
+
+files:
+  required.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: strict
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: strict
+      template:
+        metadata:
+          labels:
+            app: strict
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: zone
+                        operator: In
+                        values:
+                          - eu-west-1a
+          containers:
+            - name: app
+              image: nginx:1.22
+  preferred.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: relaxed
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: relaxed
+      template:
+        metadata:
+          labels:
+            app: relaxed
+        spec:
+          affinity:
+            nodeAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 80
+                  preference:
+                    matchExpressions:
+                      - key: zone
+                        operator: In
+                        values:
+                          - eu-west-1a
+          containers:
+            - name: app
+              image: nginx:1.22
+
+steps:
+  - type: challenge
+    prompt: See which zones your nodes are in.
+    hint: kubectl get nodes -o wide
+    expected:
+      verb: get
+      resource: nodes
+    reveal: Only worker-3 has a zone label, and it is eu-west-1c.
+
+  - type: challenge
+    prompt: Deploy the workload that *requires* zone eu-west-1a.
+    hint: kubectl apply -f required.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: required.yaml
+
+  - type: challenge
+    prompt: Check where those Pods went.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: Pending. A required rule that matches nothing blocks scheduling.
+
+  - type: challenge
+    prompt: Now deploy the version that only *prefers* that zone.
+    hint: kubectl apply -f preferred.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: preferred.yaml
+
+  - type: challenge
+    prompt: Compare the two Deployments' Pods.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: The relaxed Pods scheduled anyway. A preference is advice, not a gate.
+
+  - type: challenge
+    prompt: Give the strict Deployment what it wants.
+    hint: kubectl label node worker-1 zone=eu-west-1a
+    expected:
+      verb: label
+      resource: nodes
+      name: worker-1
+    reveal: The pending Pods schedule immediately onto worker-1.
+
+  - type: explanation
+    text: |
+      Two rule types, and the names say exactly what they do:
+
+      - requiredDuringScheduling...  a hard filter. No match, no scheduling.
+      - preferredDuringScheduling... a scoring hint with a weight.
+
+      Both end in `IgnoredDuringExecution`, which is the part people forget: the
+      rules are evaluated once, when the Pod is placed. Change the labels later
+      and running Pods are not moved.
+
+      Operators available: In, NotIn, Exists, DoesNotExist, Gt, Lt - which is
+      what makes affinity strictly more expressive than nodeSelector.
+
+  - type: transition
+    text: |
+      Affinity is the Pod choosing a node. Taints are the node refusing Pods.

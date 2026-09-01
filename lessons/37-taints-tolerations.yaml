@@ -1,0 +1,131 @@
+id: taints-tolerations
+chapter: Scheduling
+title: Nodes That Say No
+concept: Taints and tolerations
+
+intro: |
+  Affinity lets a Pod choose nodes. Taints work the other way round: a node
+  repels every Pod that does not explicitly accept it.
+
+  You have already seen one - the control plane has been refusing your Pods
+  since lesson one.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 2
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+
+files:
+  gpu-job.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: trainer
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: trainer
+      template:
+        metadata:
+          labels:
+            app: trainer
+        spec:
+          tolerations:
+            - key: gpu
+              operator: Equal
+              value: "true"
+              effect: NoSchedule
+          nodeSelector:
+            gpu: "true"
+          containers:
+            - name: app
+              image: nginx:1.22
+
+steps:
+  - type: challenge
+    prompt: Look at the taint the control plane carries.
+    hint: kubectl describe node control-plane
+    expected:
+      verb: describe
+      resource: nodes
+      name: control-plane
+    reveal: "node-role.kubernetes.io/control-plane:NoSchedule - that is why your Pods never land there."
+
+  - type: challenge
+    prompt: Reserve worker-2 for GPU work by tainting it.
+    hint: "kubectl taint nodes worker-2 gpu=true:NoSchedule"
+    expected:
+      verb: taint
+      resource: nodes
+      name: worker-2
+
+  - type: challenge
+    prompt: Label it too, so GPU workloads can find it.
+    hint: kubectl label node worker-2 gpu=true
+    expected:
+      verb: label
+      resource: nodes
+      name: worker-2
+
+  - type: challenge
+    prompt: Force the web Deployment to reschedule and see where it can still go.
+    hint: kubectl rollout restart deployment/web
+    expected:
+      verb: rollout
+      subcommand: restart
+      resource: deployments
+      name: web
+
+  - type: challenge
+    prompt: Check the placement.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: Every web Pod is on worker-1 now. worker-2 is off limits.
+
+  - type: challenge
+    prompt: Deploy the trainer, which tolerates the taint.
+    hint: kubectl apply -f gpu-job.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: gpu-job.yaml
+
+  - type: challenge
+    prompt: See where the trainer Pods went.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: On worker-2 - the only workload allowed there.
+
+  - type: explanation
+    text: |
+      Taints and tolerations are a lock and a key:
+
+      - the taint is on the node and repels Pods
+      - the toleration is on the Pod and says "I accept that taint"
+
+      Effects:
+
+      - NoSchedule        no new Pods without the toleration
+      - PreferNoSchedule  soft version
+      - NoExecute         also evicts Pods that are already running
+
+      A toleration does not *attract* a Pod - it only removes the objection. To
+      actually pull the Pod onto that node you still need a nodeSelector or
+      affinity, which is why the trainer manifest has both.
+
+  - type: transition
+    text: |
+      Placement solved. Now: is the container actually healthy once it runs?

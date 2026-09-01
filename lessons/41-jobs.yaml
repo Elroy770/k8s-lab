@@ -1,0 +1,122 @@
+id: jobs
+chapter: Jobs
+title: Work That Ends
+concept: Job
+
+intro: |
+  A Deployment restarts your container forever - which is a disaster for a
+  database migration that has already succeeded.
+
+  A Job runs Pods until a target number of them have *completed*, then stops.
+
+files:
+  migrate.yaml: |
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: migrate
+    spec:
+      completions: 3
+      parallelism: 1
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            job-name: migrate
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: app
+              image: busybox:1.36
+  broken.yaml: |
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: doomed
+    spec:
+      completions: 1
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            job-name: doomed
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: app
+              image: busybox:1.36
+              command: ["sh", "-c", "exit 1"]
+
+steps:
+  - type: challenge
+    prompt: Run a Job that must complete three times.
+    hint: kubectl apply -f migrate.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: migrate.yaml
+
+  - type: challenge
+    prompt: Watch the Pods it creates.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: "Pods reach Completed and stay there - they are not restarted."
+
+  - type: challenge
+    prompt: Check the Job's progress.
+    hint: kubectl get jobs
+    expected:
+      verb: get
+      resource: jobs
+    reveal: "COMPLETIONS counts up to 3/3, one Pod at a time (parallelism: 1)."
+
+  - type: challenge
+    prompt: Read the output of one of the finished Pods.
+    hint: "kubectl logs <paste-a-completed-pod-name>"
+    expected:
+      verb: logs
+    reveal: Completed Pods are kept precisely so you can still read their logs.
+
+  - type: challenge
+    prompt: Now run a Job that fails on purpose.
+    hint: kubectl apply -f broken.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: broken.yaml
+
+  - type: challenge
+    prompt: See how the cluster reacts.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: Failed Pods pile up until backoffLimit is reached, then it gives up.
+
+  - type: challenge
+    prompt: Inspect the failing Job.
+    hint: kubectl describe job doomed
+    expected:
+      verb: describe
+      resource: jobs
+      name: doomed
+
+  - type: explanation
+    text: |
+      The three fields that define a Job:
+
+      - completions   how many successful Pods are needed
+      - parallelism   how many may run at once
+      - backoffLimit  how many failures before the Job is abandoned
+
+      `restartPolicy` must be `Never` or `OnFailure` - `Always` is rejected,
+      because "always restart" is the opposite of "this finishes".
+
+      Jobs are not cleaned up automatically. That is deliberate: their Pods are
+      the record of what happened.
+
+  - type: transition
+    text: |
+      Same thing, but on a timer.

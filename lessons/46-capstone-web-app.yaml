@@ -1,0 +1,173 @@
+id: capstone-web-app
+chapter: Capstones
+title: Ship a Complete Web Application
+concept: ConfigMap + Deployment + Service + Ingress
+
+intro: |
+  No new concepts from here on. This is assembly.
+
+  Build a public web application from nothing: configuration, workload, stable
+  address, and an HTTP route - then prove it works end to end.
+
+files:
+  01-config.yaml: |
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: shop-config
+    data:
+      APP_MODE: production
+      CURRENCY: EUR
+  02-deployment.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: shop
+    spec:
+      replicas: 3
+      selector:
+        matchLabels:
+          app: shop
+      template:
+        metadata:
+          labels:
+            app: shop
+        spec:
+          containers:
+            - name: app
+              image: nginx:1.22
+              envFrom:
+                - configMapRef:
+                    name: shop-config
+              readinessProbe:
+                httpGet:
+                  path: /ready
+                  port: 80
+              livenessProbe:
+                httpGet:
+                  path: /healthz
+                  port: 80
+  03-service.yaml: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: shop
+    spec:
+      selector:
+        app: shop
+      ports:
+        - port: 80
+          targetPort: 80
+  04-ingress.yaml: |
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: shop
+    spec:
+      ingressClassName: nginx
+      rules:
+        - host: shop.example.com
+          http:
+            paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: shop
+                    port:
+                      number: 80
+
+steps:
+  - type: observation
+    text: |
+      Four manifests are waiting in the Manifests panel. Apply them in order and
+      check the result after each one - that habit is worth more than speed.
+
+  - type: challenge
+    prompt: Create the configuration.
+    hint: kubectl apply -f 01-config.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: 01-config.yaml
+
+  - type: challenge
+    prompt: Create the workload, with both probes wired up.
+    hint: kubectl apply -f 02-deployment.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: 02-deployment.yaml
+
+  - type: challenge
+    prompt: Confirm all three Pods reached Ready.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+
+  - type: challenge
+    prompt: Give them a stable internal address.
+    hint: kubectl apply -f 03-service.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: 03-service.yaml
+
+  - type: challenge
+    prompt: Check the endpoints before going further.
+    hint: kubectl get endpoints
+    expected:
+      verb: get
+      resource: endpoints
+    reveal: Three endpoints. If this were empty, the Ingress could not help you.
+
+  - type: challenge
+    prompt: Publish it on a hostname.
+    hint: kubectl apply -f 04-ingress.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: 04-ingress.yaml
+
+  - type: challenge
+    prompt: Test the whole path from the outside.
+    hint: curl http://shop.example.com
+    expected:
+      verb: curl
+      contains: shop.example.com
+    reveal: "ingress -> service -> pod. Four objects, one working application."
+
+  - type: challenge
+    prompt: Ship a new version without downtime.
+    hint: kubectl set image deployment/shop app=nginx:1.23
+    expected:
+      verb: set
+      subcommand: image
+      resource: deployments
+      name: shop
+
+  - type: challenge
+    prompt: Keep serving traffic while it rolls.
+    hint: curl http://shop.example.com
+    expected:
+      verb: curl
+      contains: shop.example.com
+    reveal: Still 200. Readiness gating is what makes that true.
+
+  - type: explanation
+    text: |
+      What you just built is the shape of nearly every stateless service in
+      production:
+
+          ConfigMap    what is configurable
+          Deployment   what runs, how many, and how health is judged
+          Service      a stable name and a set of Ready endpoints
+          Ingress      the public route
+
+      Every one of them is independent. You can scale, reconfigure, rollback or
+      re-route without touching the others.
+
+  - type: transition
+    text: |
+      Now the harder shape: an application that owns data.

@@ -9,7 +9,8 @@ spec:
   selector:
     app: k8s-story-lab
   ports:
-    - protocol: TCP
+    - name: http
+      protocol: TCP
       port: 80
-      targetPort: 80
+      targetPort: 3000
   type: ClusterIP

@@ -1,0 +1,94 @@
+id: daemonset
+chapter: Workload Types
+title: One Pod On Every Node
+concept: DaemonSet
+
+intro: |
+  A Deployment answers "how many copies?". Sometimes that is the wrong
+  question.
+
+  Log shippers, metrics agents and network plugins need exactly one Pod per
+  node - however many nodes there happen to be.
+
+files:
+  fluentd.yaml: |
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      name: fluentd
+    spec:
+      selector:
+        matchLabels:
+          app: fluentd
+      template:
+        metadata:
+          labels:
+            app: fluentd
+        spec:
+          containers:
+            - name: app
+              image: fluentd:1.16
+
+steps:
+  - type: challenge
+    prompt: Deploy the log shipper as a DaemonSet.
+    hint: kubectl apply -f fluentd.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: fluentd.yaml
+    reveal: Notice there is no `replicas` field anywhere in that manifest.
+
+  - type: challenge
+    prompt: Look at the DaemonSet. Where did DESIRED come from?
+    hint: kubectl get ds
+    expected:
+      verb: get
+      resource: daemonsets
+    reveal: DESIRED equals the number of eligible nodes, not a number you chose.
+
+  - type: challenge
+    prompt: See which node each Pod landed on.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: One Pod per worker. The control plane is tainted, so it is skipped.
+
+  - type: observation
+    text: |
+      Your cluster is growing: the platform team just joined a third worker.
+
+      Watch the cluster panel - you did not run any command.
+    effect:
+      addNode:
+        name: worker-3
+
+  - type: challenge
+    prompt: List the Pods again.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: A third fluentd Pod appeared on its own.
+
+  - type: explanation
+    text: |
+      The DaemonSet controller does not count replicas. Its loop is:
+
+          for every node that this Pod may run on
+            is there a Pod of mine there?
+              no  -> create one
+              yes -> do nothing
+
+      Add a node and it is covered automatically. Remove a node and the Pod
+      disappears with it. This is why cluster agents are DaemonSets and never
+      Deployments.
+
+  - type: transition
+    text: |
+      Next: workloads where the Pods are *not* interchangeable.

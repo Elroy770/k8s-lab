@@ -1,0 +1,188 @@
+id: broken-cluster
+chapter: Capstones
+title: Everything Is On Fire
+concept: End-to-end triage
+
+intro: |
+  You are on call. Three services were deployed overnight by three different
+  teams and none of them work.
+
+  Nobody is going to tell you what is wrong. Use the same tools you have used
+  all course: get, describe, events, curl.
+
+initialState:
+  storageClasses:
+    - name: standard
+      provisioner: lab.local/dynamic
+      isDefault: true
+  deployments:
+    - name: web
+      replicas: 2
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+    - name: api
+      replicas: 2
+      template:
+        image: nginx:2.99
+        labels:
+          app: api
+    - name: reports
+      replicas: 1
+      template:
+        image: nginx:1.22
+        labels:
+          app: reports
+        volumes:
+          - name: data
+            kind: persistentVolumeClaim
+            source: reports-data
+        mounts:
+          - name: data
+            mountPath: /data
+  persistentVolumeClaims:
+    - name: reports-data
+      requestGi: 2
+      accessModes:
+        - ReadWriteOnce
+      storageClass: gold
+  services:
+    - name: web
+      selector:
+        app: web-frontend
+      port: 80
+    - name: api
+      selector:
+        app: api
+      port: 80
+
+files:
+  reports-claim.yaml: |
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: reports-data
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      storageClassName: standard
+      resources:
+        requests:
+          storage: 2Gi
+
+steps:
+  - type: challenge
+    prompt: Get the lay of the land.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: One healthy set, one ImagePullBackOff, one Pending. Three faults.
+
+  - type: challenge
+    prompt: Fault 1 - the web Pods are healthy, but users get errors. Test the Service.
+    hint: curl http://web
+    allowError: true
+    expected:
+      verb: curl
+      contains: web
+    reveal: 503 with no endpoints, even though the Pods are Ready.
+
+  - type: challenge
+    prompt: Inspect that Service.
+    hint: kubectl describe svc web
+    expected:
+      verb: describe
+      resource: services
+      name: web
+    reveal: "It selects app=web-frontend. The Pods are labelled app=web."
+
+  - type: challenge
+    prompt: Replace the broken Service.
+    hint: kubectl delete svc web
+    expected:
+      verb: delete
+      resource: services
+      name: web
+
+  - type: challenge
+    prompt: Recreate it from the Deployment so the selector is correct.
+    hint: kubectl expose deployment web --port=80
+    expected:
+      verb: expose
+      resource: deployments
+      name: web
+
+  - type: challenge
+    prompt: Confirm fault 1 is fixed.
+    hint: curl http://web
+    expected:
+      verb: curl
+      contains: web
+    reveal: 200. One down, two to go.
+
+  - type: challenge
+    prompt: Fault 2 - find out why the api Pods will not start.
+    hint: "kubectl describe pod <paste-an-api-pod-name>"
+    expected:
+      verb: describe
+      resource: pods
+    reveal: "nginx:2.99 does not exist. Someone typo'd the tag."
+
+  - type: challenge
+    prompt: Roll the api forward to a real image.
+    hint: kubectl set image deployment/api app=nginx:1.22
+    expected:
+      verb: set
+      subcommand: image
+      resource: deployments
+      name: api
+
+  - type: challenge
+    prompt: Fault 3 - the reports Pod is Pending. Follow the trail.
+    hint: kubectl get pvc
+    expected:
+      verb: get
+      resource: persistentvolumeclaims
+    reveal: "Pending, storage class `gold`, which this cluster does not have."
+
+  - type: challenge
+    prompt: Delete the unbindable claim.
+    hint: kubectl delete pvc reports-data
+    expected:
+      verb: delete
+      resource: persistentvolumeclaims
+      name: reports-data
+
+  - type: challenge
+    prompt: Recreate it against the real storage class.
+    hint: kubectl apply -f reports-claim.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: reports-claim.yaml
+
+  - type: challenge
+    prompt: Final check - is everything healthy?
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: All Running and Ready. Three faults, three different layers.
+
+  - type: explanation
+    text: |
+      Every fault you fixed lived in a different layer, and each had a
+      characteristic signature:
+
+      - Service with no endpoints, Pods healthy  -> labels and selectors
+      - ImagePullBackOff                         -> registry, tag or credentials
+      - Pod Pending forever                      -> scheduling or storage
+
+      The Pod's state is always the first clue, and it always points at the
+      layer to investigate next. That is the entire debugging method.
+
+  - type: transition
+    text: |
+      One last look at the whole system you have learned to operate.

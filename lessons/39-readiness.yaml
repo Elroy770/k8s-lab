@@ -1,0 +1,130 @@
+id: readiness
+chapter: Health
+title: Not Dead, Just Not Ready
+concept: Readiness probes
+
+intro: |
+  A container that has started is not necessarily able to serve. Caches warm up,
+  migrations run, connections open.
+
+  Sending traffic during that window produces errors that look like a network
+  problem and are not.
+
+files:
+  app.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: web
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: web
+      template:
+        metadata:
+          labels:
+            app: web
+        spec:
+          containers:
+            - name: app
+              image: nginx:1.22
+              readinessProbe:
+                httpGet:
+                  path: /not-ready-yet
+                  port: 80
+  fixed.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: web
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: web
+      template:
+        metadata:
+          labels:
+            app: web
+        spec:
+          containers:
+            - name: app
+              image: nginx:1.22
+              readinessProbe:
+                httpGet:
+                  path: /ready
+                  port: 80
+
+steps:
+  - type: challenge
+    prompt: Deploy the app with a readiness probe pointing at a path it does not serve.
+    hint: kubectl apply -f app.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: app.yaml
+
+  - type: challenge
+    prompt: Give the Service a front door.
+    hint: kubectl expose deployment web --port=80
+    expected:
+      verb: expose
+      resource: deployments
+      name: web
+
+  - type: challenge
+    prompt: Look at the Pods.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: "Status Running, READY 0/1, zero restarts. Nothing is being killed."
+
+  - type: challenge
+    prompt: Now check the Service's endpoints.
+    hint: kubectl get endpoints
+    expected:
+      verb: get
+      resource: endpoints
+    reveal: "<none>. Not-Ready Pods are removed from the load balancer."
+
+  - type: challenge
+    prompt: Try to reach the app.
+    hint: curl http://web
+    allowError: true
+    expected:
+      verb: curl
+      contains: web
+    reveal: 503 - the Service is protecting users from a Pod that cannot serve.
+
+  - type: challenge
+    prompt: Fix the probe path.
+    hint: kubectl apply -f fixed.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: fixed.yaml
+
+  - type: challenge
+    prompt: Confirm traffic flows once the Pods report ready.
+    hint: curl http://web
+    expected:
+      verb: curl
+      contains: web
+    reveal: 200. Endpoints repopulated automatically.
+
+  - type: explanation
+    text: |
+      The difference in one line:
+
+      - liveness fails  -> restart the container
+      - readiness fails -> take it out of Service endpoints, leave it running
+
+      Readiness is also what makes rolling updates safe. The Deployment waits
+      for new Pods to become Ready before retiring old ones, so "Ready" must
+      genuinely mean "can serve a request".
+
+  - type: transition
+    text: |
+      One more probe, for applications that start slowly.

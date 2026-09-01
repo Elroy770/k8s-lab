@@ -1,0 +1,151 @@
+id: final-architecture
+chapter: Capstones
+title: The Whole Picture
+concept: How every object fits together
+
+intro: |
+  A full application is running: configuration, a stateless tier, a stateful
+  tier, a node agent, a Service, an Ingress and a scheduled job.
+
+  Walk it once, top to bottom, and take the mental model with you.
+
+initialState:
+  storageClasses:
+    - name: standard
+      provisioner: lab.local/dynamic
+      isDefault: true
+  configMaps:
+    - name: shop-config
+      data:
+        APP_MODE: production
+  deployments:
+    - name: shop
+      replicas: 3
+      template:
+        image: nginx:1.23
+        labels:
+          app: shop
+        envFrom:
+          - kind: configMap
+            name: shop-config
+  statefulSets:
+    - name: pg
+      replicas: 2
+      selector:
+        app: pg
+      serviceName: pg
+      template:
+        image: postgres:16
+        labels:
+          app: pg
+        mounts:
+          - name: data
+            mountPath: /var/lib/data
+      volumeClaimTemplate:
+        name: data
+        requestGi: 5
+  daemonSets:
+    - name: node-exporter
+      selector:
+        app: node-exporter
+      template:
+        image: node-exporter:1.7
+        labels:
+          app: node-exporter
+  services:
+    - name: shop
+      selector:
+        app: shop
+      port: 80
+    - name: pg
+      selector:
+        app: pg
+      port: 5432
+      headless: true
+  ingresses:
+    - name: shop
+      className: nginx
+      rules:
+        - host: shop.example.com
+          path: /
+          service: shop
+          port: 80
+
+steps:
+  - type: challenge
+    prompt: Show every workload object in the namespace.
+    hint: kubectl get all
+    expected:
+      verb: get
+      resource: all
+
+  - type: challenge
+    prompt: Follow the public route in from the edge.
+    hint: curl http://shop.example.com
+    expected:
+      verb: curl
+      contains: shop.example.com
+    reveal: "ingress -> service -> endpoints -> pod, in one line of output."
+
+  - type: challenge
+    prompt: Check where the stateful tier keeps its data.
+    hint: kubectl get pvc
+    expected:
+      verb: get
+      resource: persistentvolumeclaims
+
+  - type: challenge
+    prompt: Confirm the node agent still covers every worker.
+    hint: kubectl get ds
+    expected:
+      verb: get
+      resource: daemonsets
+
+  - type: challenge
+    prompt: Break something on purpose - delete a shop Pod.
+    hint: "kubectl delete pod <paste-a-shop-pod-name>"
+    expected:
+      verb: delete
+      resource: pods
+    reveal: Replaced automatically, and the Service endpoints follow it.
+
+  - type: challenge
+    prompt: Verify nothing user-visible changed.
+    hint: curl http://shop.example.com
+    expected:
+      verb: curl
+      contains: shop.example.com
+    reveal: Still 200. That is the whole promise of the system.
+
+  - type: explanation
+    text: |
+      Everything you have learned is the same loop at different altitudes:
+
+          Ingress       routes hostnames and paths to Services
+          Service       tracks Ready Pods by label, gives them one address
+          Deployment    keeps the right ReplicaSet at the right size
+          StatefulSet   keeps identities and volumes stable
+          DaemonSet     keeps one Pod per node
+          Job/CronJob   runs work that finishes
+          PVC/PV        keeps data alive when Pods are not
+          scheduler     decides where, using labels, affinity and taints
+          kubelet       keeps containers running, and probes them
+
+      None of them remembers what you did. Each one only ever compares what is
+      to what should be, and closes the gap.
+
+  - type: observation
+    text: |
+      The operating rules that follow:
+
+      - declare state in manifests; use imperative commands only to explore
+      - never rely on a Pod name, a Pod IP, or a container filesystem
+      - change the controller, never the object it owns
+      - readiness is a promise about serving traffic - make it truthful
+      - when something breaks, read the Pod state first, then follow the layer
+        it points to
+
+  - type: transition
+    text: |
+      That is the core of Kubernetes. Everything else - RBAC, network policies,
+      operators, autoscaling - is built on exactly these mechanics.

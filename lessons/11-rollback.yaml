@@ -1,0 +1,81 @@
+id: rollback
+chapter: Workloads
+title: Undo
+concept: kubectl rollout undo
+
+intro: |
+  You have walked into someone else's mess: a rollout to `nginx:1.99` is stuck
+  and has been for a while.
+
+  Get the cluster back to a known good state.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 3
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+      previousImages:
+        - nginx:1.21
+      pendingImage: nginx:1.99
+
+steps:
+  - type: challenge
+    prompt: Confirm the damage — which Pods are unhealthy?
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: One Pod in ImagePullBackOff, three old Pods still serving.
+
+  - type: challenge
+    prompt: Find out what you can go back to.
+    hint: kubectl rollout history deployment/web
+    expected:
+      verb: rollout
+      subcommand: history
+      resource: deployments
+    reveal: Revision 2 (nginx:1.22) was the last good one.
+
+  - type: challenge
+    prompt: Roll the Deployment back to the previous revision.
+    hint: kubectl rollout undo deployment/web
+    expected:
+      verb: rollout
+      subcommand: undo
+      resource: deployments
+      name: web
+    reveal: The broken ReplicaSet is being scaled to zero.
+
+  - type: challenge
+    prompt: Verify that the rollout is healthy again.
+    hint: kubectl rollout status deployment/web
+    expected:
+      verb: rollout
+      subcommand: status
+      resource: deployments
+
+  - type: challenge
+    prompt: Check the Pods one more time.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: Three healthy Pods on nginx:1.22.
+
+  - type: explanation
+    text: |
+      A rollback is a *forward* operation. Kubernetes did not rewind time: it
+      created a new revision whose template happens to be an old one, and rolled
+      to it using the same mechanism as any other release.
+
+      That is why `rollout history` now shows an extra revision instead of
+      fewer.
+
+  - type: transition
+    text: |
+      One last look at the whole machine you have been driving.

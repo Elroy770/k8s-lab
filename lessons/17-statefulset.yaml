@@ -1,0 +1,100 @@
+id: statefulset
+chapter: Workload Types
+title: Pods With Names That Mean Something
+concept: StatefulSet
+
+intro: |
+  Deployment Pods are cattle: random names, any order, fully interchangeable.
+
+  Databases do not work that way. A replica needs a stable identity so the rest
+  of the cluster can find it after a restart.
+
+files:
+  db.yaml: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: db
+    spec:
+      clusterIP: None
+      selector:
+        app: db
+      ports:
+        - port: 5432
+    ---
+    apiVersion: apps/v1
+    kind: StatefulSet
+    metadata:
+      name: db
+    spec:
+      serviceName: db
+      replicas: 3
+      selector:
+        matchLabels:
+          app: db
+      template:
+        metadata:
+          labels:
+            app: db
+        spec:
+          containers:
+            - name: app
+              image: postgres:16
+
+steps:
+  - type: challenge
+    prompt: Create the headless Service and the StatefulSet.
+    hint: kubectl apply -f db.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: db.yaml
+    reveal: Watch the cluster panel - the Pods appear one at a time, in order.
+
+  - type: challenge
+    prompt: List the Pods and read their names carefully.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: "db-0, db-1, db-2 - ordinals, not random suffixes."
+
+  - type: challenge
+    prompt: Delete the middle one.
+    hint: kubectl delete pod db-1
+    expected:
+      verb: delete
+      resource: pods
+      name: db-1
+
+  - type: challenge
+    prompt: List the Pods again. What is the replacement called?
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: "db-1 came back as db-1. The identity is part of the contract."
+
+  - type: challenge
+    prompt: Look at the Service backing it.
+    hint: kubectl get svc
+    expected:
+      verb: get
+      resource: services
+    reveal: "CLUSTER-IP is None - a headless Service gives each Pod its own DNS name."
+
+  - type: explanation
+    text: |
+      A StatefulSet guarantees three things a Deployment does not:
+
+      - stable network identity: `db-0` is always `db-0`
+      - ordered start-up: `db-1` is only created once `db-0` is Ready
+      - ordered, reverse scale-down: the highest ordinal goes first
+
+      The headless Service (`clusterIP: None`) is what turns those ordinals into
+      DNS names like `db-0.db`, so a leader can be addressed directly instead of
+      load balanced at random.
+
+  - type: transition
+    text: |
+      Stable names are half the story. Stable disks are the other half.

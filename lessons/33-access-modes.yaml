@@ -1,0 +1,113 @@
+id: access-modes
+chapter: Storage
+title: Who Is Allowed to Mount It
+concept: Access modes
+
+intro: |
+  Access modes describe what the storage backend can physically do, not what
+  you would like it to do.
+
+  A claim that asks for something the volume cannot provide simply never binds.
+
+initialState:
+  storageClasses:
+    - name: manual
+      provisioner: kubernetes.io/no-provisioner
+  persistentVolumes:
+    - name: pv-block
+      capacityGi: 5
+      accessModes:
+        - ReadWriteOnce
+      storageClass: manual
+
+files:
+  shared-claim.yaml: |
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: shared
+    spec:
+      accessModes:
+        - ReadWriteMany
+      storageClassName: manual
+      resources:
+        requests:
+          storage: 2Gi
+  pv-shared.yaml: |
+    apiVersion: v1
+    kind: PersistentVolume
+    metadata:
+      name: pv-nfs
+    spec:
+      capacity:
+        storage: 5Gi
+      accessModes:
+        - ReadWriteMany
+      storageClassName: manual
+
+steps:
+  - type: challenge
+    prompt: Look at the volume this cluster already has.
+    hint: kubectl get pv
+    expected:
+      verb: get
+      resource: persistentvolumes
+    reveal: "RWO - ReadWriteOnce. One node may mount it read-write."
+
+  - type: challenge
+    prompt: Create a claim that asks for shared read-write access.
+    hint: kubectl apply -f shared-claim.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: shared-claim.yaml
+
+  - type: challenge
+    prompt: Check whether it bound.
+    hint: kubectl get pvc
+    expected:
+      verb: get
+      resource: persistentvolumeclaims
+    reveal: Pending. It will stay Pending forever unless something changes.
+
+  - type: challenge
+    prompt: Ask the claim why.
+    hint: kubectl describe pvc shared
+    expected:
+      verb: describe
+      resource: persistentvolumeclaims
+      name: shared
+    reveal: No volume in that class can satisfy ReadWriteMany.
+
+  - type: challenge
+    prompt: Provide a volume that can.
+    hint: kubectl apply -f pv-shared.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: pv-shared.yaml
+
+  - type: challenge
+    prompt: Check the claim again.
+    hint: kubectl get pvc
+    expected:
+      verb: get
+      resource: persistentvolumeclaims
+    reveal: Bound - to the RWX volume, not the RWO one.
+
+  - type: explanation
+    text: |
+      The three modes you will meet:
+
+      - ReadWriteOnce (RWO)  one node, read-write. Cloud block storage.
+      - ReadOnlyMany (ROX)   many nodes, read-only.
+      - ReadWriteMany (RWX)  many nodes, read-write. Needs a network filesystem.
+
+      RWO is per *node*, not per Pod - two Pods on the same node can share it,
+      two Pods on different nodes cannot. This is exactly why a Deployment with
+      3 replicas and one RWO claim gets stuck the moment the scheduler spreads
+      the Pods out.
+
+  - type: transition
+    text: |
+      Now put it together and debug a Pod that will not start.

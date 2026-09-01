@@ -1,0 +1,140 @@
+id: configmaps
+chapter: Configuration
+title: Configuration That Lives Outside the Image
+concept: ConfigMap
+
+intro: |
+  The same image should run in dev, staging and production. That only works if
+  configuration is not baked into it.
+
+  A ConfigMap is a bag of key/value pairs the cluster hands to your containers
+  at start-up.
+
+files:
+  app.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: web
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: web
+      template:
+        metadata:
+          labels:
+            app: web
+        spec:
+          containers:
+            - name: app
+              image: nginx:1.21
+              envFrom:
+                - configMapRef:
+                    name: app-config
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/config
+          volumes:
+            - name: config
+              configMap:
+                name: app-config
+  config-v2.yaml: |
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: app-config
+    data:
+      APP_COLOR: green
+      APP_MODE: production
+
+steps:
+  - type: challenge
+    prompt: Create a ConfigMap called `app-config` with `APP_COLOR=blue` and `APP_MODE=production`.
+    hint: kubectl create configmap app-config --from-literal=APP_COLOR=blue --from-literal=APP_MODE=production
+    expected:
+      verb: create
+      resource: configmaps
+      name: app-config
+    reveal: A ConfigMap is just data. Nothing consumes it yet.
+
+  - type: challenge
+    prompt: Show what is inside it.
+    hint: kubectl describe configmap app-config
+    expected:
+      verb: describe
+      resource: configmaps
+      name: app-config
+
+  - type: challenge
+    prompt: Deploy the app that consumes it. Read `app.yaml` first if you like.
+    hint: kubectl apply -f app.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: app.yaml
+    reveal: The Deployment injects the ConfigMap twice - as env vars and as files.
+
+  - type: challenge
+    prompt: Look at the environment inside one of the Pods.
+    hint: "kubectl exec <paste-a-pod-name> -- env"
+    expected:
+      verb: exec
+      contains: env
+    reveal: APP_COLOR=blue arrived from the ConfigMap, not from the image.
+
+  - type: challenge
+    prompt: The same keys are also mounted as files. List them.
+    hint: "kubectl exec <paste-a-pod-name> -- ls /etc/config"
+    expected:
+      verb: exec
+      contains: /etc/config
+    reveal: Each key became a file. This is the other way to consume a ConfigMap.
+
+  - type: challenge
+    prompt: Now change the configuration - apply `config-v2.yaml`, which sets APP_COLOR to green.
+    hint: kubectl apply -f config-v2.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: config-v2.yaml
+
+  - type: challenge
+    prompt: Check the environment of the running Pod again. Did it change?
+    hint: "kubectl exec <paste-a-pod-name> -- env"
+    expected:
+      verb: exec
+      contains: env
+    reveal: Still blue. Environment variables are frozen at container start.
+
+  - type: challenge
+    prompt: Read the mounted file instead.
+    hint: "kubectl exec <paste-a-pod-name> -- cat /etc/config/APP_COLOR"
+    expected:
+      verb: exec
+      contains: APP_COLOR
+    reveal: green. Mounted keys update; environment variables do not.
+
+  - type: challenge
+    prompt: Force the Pods to pick up the new environment.
+    hint: kubectl rollout restart deployment/web
+    expected:
+      verb: rollout
+      subcommand: restart
+      resource: deployments
+      name: web
+    reveal: New Pods, new environment. This is the standard way to reload config.
+
+  - type: explanation
+    text: |
+      Two ways in, two very different behaviours:
+
+      - `envFrom` / `env` is read once, when the container starts
+      - a mounted ConfigMap volume is refreshed by the kubelet
+
+      This is why "I changed the ConfigMap and nothing happened" is one of the
+      most common Kubernetes support questions.
+
+  - type: transition
+    text: |
+      Passwords need the same decoupling, but with different handling.

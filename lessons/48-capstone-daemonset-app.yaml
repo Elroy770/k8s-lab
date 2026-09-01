@@ -1,0 +1,117 @@
+id: capstone-daemonset-app
+chapter: Capstones
+title: Cover Every Node, Including the Ones That Refuse
+concept: DaemonSet + tolerations
+
+intro: |
+  Monitoring has a rule that application teams do not: it must run everywhere,
+  including on the nodes that repel normal workloads.
+
+  Build a node exporter that covers the whole cluster.
+
+files:
+  exporter.yaml: |
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      name: node-exporter
+    spec:
+      selector:
+        matchLabels:
+          app: node-exporter
+      template:
+        metadata:
+          labels:
+            app: node-exporter
+        spec:
+          containers:
+            - name: app
+              image: node-exporter:1.7
+  exporter-full.yaml: |
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      name: node-exporter-full
+    spec:
+      selector:
+        matchLabels:
+          app: node-exporter-full
+      template:
+        metadata:
+          labels:
+            app: node-exporter-full
+        spec:
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: app
+              image: node-exporter:1.7
+
+steps:
+  - type: challenge
+    prompt: Deploy the exporter with no tolerations.
+    hint: kubectl apply -f exporter.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: exporter.yaml
+
+  - type: challenge
+    prompt: Count the nodes.
+    hint: kubectl get nodes
+    expected:
+      verb: get
+      resource: nodes
+    reveal: Three nodes, one of which is the control plane.
+
+  - type: challenge
+    prompt: Now count the exporter Pods.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: Only the workers are covered. The control plane is a blind spot.
+
+  - type: challenge
+    prompt: Deploy the version that tolerates the control-plane taint.
+    hint: kubectl apply -f exporter-full.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: exporter-full.yaml
+
+  - type: challenge
+    prompt: Check the coverage again.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: Every node, control plane included.
+
+  - type: challenge
+    prompt: Confirm the DaemonSet agrees about how many it wants.
+    hint: kubectl get ds
+    expected:
+      verb: get
+      resource: daemonsets
+    reveal: "DESIRED differs between the two - eligibility is per-DaemonSet."
+
+  - type: explanation
+    text: |
+      This is the one case where a toleration is the whole point. Cluster
+      infrastructure - metrics, logs, CNI, storage agents - is expected to run
+      on nodes that deliberately reject everything else.
+
+      Notice the operator used: `Exists` with no value. It tolerates the taint
+      whatever its value is, which is what you want for a taint the platform
+      controls and may change.
+
+  - type: transition
+    text: |
+      Final exercise. Nobody tells you what is broken this time.

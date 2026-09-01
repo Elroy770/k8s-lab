@@ -1,0 +1,77 @@
+id: ephemeral-storage
+chapter: Storage
+title: The Container Filesystem Is a Lie
+concept: Ephemeral storage
+
+intro: |
+  A container has a writable filesystem. It feels like a disk. It is not.
+
+  Prove it to yourself before you trust it with anything.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 1
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+
+steps:
+  - type: challenge
+    prompt: Find the Pod name.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+
+  - type: challenge
+    prompt: Write a file inside the container.
+    hint: "kubectl exec <paste-a-pod-name> -- sh -c \"echo important-data > /tmp/notes.txt\""
+    expected:
+      verb: exec
+      contains: /tmp/notes.txt
+
+  - type: challenge
+    prompt: Read it back.
+    hint: "kubectl exec <paste-a-pod-name> -- cat /tmp/notes.txt"
+    expected:
+      verb: exec
+      contains: cat
+    reveal: The file is there, exactly as you would expect on a normal machine.
+
+  - type: challenge
+    prompt: Now delete the Pod.
+    hint: "kubectl delete pod <paste-a-pod-name>"
+    expected:
+      verb: delete
+      resource: pods
+
+  - type: challenge
+    prompt: The ReplicaSet made a new Pod. Get its name.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+
+  - type: challenge
+    prompt: Try to read the file from the replacement.
+    hint: "kubectl exec <paste-the-new-pod-name> -- cat /tmp/notes.txt"
+    allowError: true
+    expected:
+      verb: exec
+      contains: /tmp/notes.txt
+    reveal: No such file. The write went to a layer that died with the container.
+
+  - type: explanation
+    text: |
+      A container's writable layer belongs to the container, not to the Pod and
+      certainly not to the application. It is deleted on restart, on rescheduling
+      and on every rollout.
+
+      Anything you want to keep must live on a volume. The rest of this chapter
+      is about which kind.
+
+  - type: transition
+    text: |
+      Start with the simplest volume there is.

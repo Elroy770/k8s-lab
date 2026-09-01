@@ -1,0 +1,96 @@
+id: workload-comparison
+chapter: Workload Types
+title: Choosing the Right Controller
+concept: Deployment vs StatefulSet vs DaemonSet vs Job
+
+intro: |
+  This cluster is running one of each: a stateless web tier, a database, a node
+  agent and a batch task.
+
+  Look at how differently they behave, then learn the rule for picking one.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 2
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+  statefulSets:
+    - name: db
+      replicas: 2
+      selector:
+        app: db
+      serviceName: db
+      template:
+        image: postgres:16
+        labels:
+          app: db
+  daemonSets:
+    - name: fluentd
+      selector:
+        app: fluentd
+      template:
+        image: fluentd:1.16
+        labels:
+          app: fluentd
+  jobs:
+    - name: migrate
+      completions: 1
+      template:
+        image: busybox:1.36
+        labels:
+          job-name: migrate
+        runFor: 3
+        restartPolicy: Never
+
+steps:
+  - type: challenge
+    prompt: Show everything running in the namespace.
+    hint: kubectl get all
+    expected:
+      verb: get
+      resource: all
+
+  - type: challenge
+    prompt: Compare the Pod names across all four workloads.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: Random suffixes, ordinals, one-per-node, and a Pod that Completed.
+
+  - type: challenge
+    prompt: Check the Job's completion count.
+    hint: kubectl get jobs
+    expected:
+      verb: get
+      resource: jobs
+    reveal: A Job is finished when it succeeds - it is not supposed to stay up.
+
+  - type: explanation
+    text: |
+      The decision is almost always answered by two questions.
+
+      Does each Pod need its own identity or disk?
+
+      - no  -> Deployment (stateless web, APIs, workers)
+      - yes -> StatefulSet (databases, queues, anything clustered)
+
+      Is this per-node infrastructure, or a task that ends?
+
+      - per node -> DaemonSet (logs, metrics, CNI, storage agents)
+      - it ends  -> Job (migration, batch) or CronJob (on a schedule)
+
+  - type: observation
+    text: |
+      A useful sanity check: if you cannot delete any Pod at random without
+      anyone noticing, it is probably not a Deployment.
+
+  - type: transition
+    text: |
+      Every one of these Pods has an IP address that changes constantly. That is
+      the next problem to solve.

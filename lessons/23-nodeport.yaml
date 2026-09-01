@@ -1,0 +1,82 @@
+id: nodeport
+chapter: Services
+title: Opening a Port on Every Node
+concept: NodePort
+
+intro: |
+  A ClusterIP is unreachable from outside the cluster. A NodePort is the
+  crudest way to change that: pick a high port and every node starts listening
+  on it.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 2
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+
+files:
+  nodeport.yaml: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: web-np
+    spec:
+      type: NodePort
+      selector:
+        app: web
+      ports:
+        - port: 80
+          targetPort: 80
+          nodePort: 30080
+
+steps:
+  - type: challenge
+    prompt: Create the NodePort Service.
+    hint: kubectl apply -f nodeport.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: nodeport.yaml
+
+  - type: challenge
+    prompt: Look at the port mapping.
+    hint: kubectl get svc
+    expected:
+      verb: get
+      resource: services
+    reveal: "80:30080/TCP - the Service port, then the port opened on every node."
+
+  - type: challenge
+    prompt: Reach the app through a node instead of through the cluster IP.
+    hint: curl http://worker-1:30080
+    expected:
+      verb: curl
+      contains: "30080"
+    reveal: Served by a Pod - even though that Pod may be on a different node.
+
+  - type: challenge
+    prompt: Try the same port on the other worker.
+    hint: curl http://worker-2:30080
+    expected:
+      verb: curl
+      contains: worker-2
+    reveal: Same result. Every node forwards the port, Pod or no Pod.
+
+  - type: explanation
+    text: |
+      A NodePort is a ClusterIP with an extra hop: kube-proxy opens the chosen
+      port (30000-32767 by default) on *all* nodes and forwards it to the
+      Service, which then load balances to a Ready Pod.
+
+      That is also why it is rarely used in production:
+
+      - the port number is ugly and must be tracked by hand
+      - clients need to know a node address, which defeats the abstraction
+      - there is no TLS, no host routing, no path routing
+
+  - type: transition
+    text: |
+      Which brings us to the rest of the Service types.

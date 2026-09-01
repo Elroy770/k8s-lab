@@ -1,0 +1,96 @@
+id: storageclass
+chapter: Storage
+title: Storage On Demand
+concept: StorageClass and dynamic provisioning
+
+intro: |
+  In a real cluster nobody hand-writes PersistentVolumes. A StorageClass
+  describes a *kind* of storage and a provisioner creates volumes as claims
+  arrive.
+
+initialState:
+  storageClasses:
+    - name: standard
+      provisioner: lab.local/dynamic
+      isDefault: true
+    - name: fast-ssd
+      provisioner: lab.local/dynamic
+
+files:
+  claim.yaml: |
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: auto-claim
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      storageClassName: fast-ssd
+      resources:
+        requests:
+          storage: 10Gi
+
+steps:
+  - type: challenge
+    prompt: List the storage classes this cluster offers.
+    hint: kubectl get sc
+    expected:
+      verb: get
+      resource: storageclasses
+    reveal: "`standard` is marked (default) - claims that name no class get it."
+
+  - type: challenge
+    prompt: Confirm there are no PersistentVolumes at all yet.
+    hint: kubectl get pv
+    expected:
+      verb: get
+      resource: persistentvolumes
+    reveal: Nothing. No administrator has pre-created anything.
+
+  - type: challenge
+    prompt: Create a claim asking for 10Gi of `fast-ssd`.
+    hint: kubectl apply -f claim.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: claim.yaml
+
+  - type: challenge
+    prompt: Check the claim.
+    hint: kubectl get pvc
+    expected:
+      verb: get
+      resource: persistentvolumeclaims
+    reveal: Bound - to a volume that did not exist a moment ago.
+
+  - type: challenge
+    prompt: Look at the PersistentVolumes now.
+    hint: kubectl get pv
+    expected:
+      verb: get
+      resource: persistentvolumes
+    reveal: A volume was created automatically, named after the claim.
+
+  - type: challenge
+    prompt: Read the events the provisioner recorded.
+    hint: kubectl get events
+    expected:
+      verb: get
+      resource: events
+    reveal: ProvisioningSucceeded, with the provisioner that did the work.
+
+  - type: explanation
+    text: |
+      Two models, one API:
+
+      - static:  an admin creates PVs, claims bind to whatever fits
+      - dynamic: a StorageClass names a provisioner, and volumes are created
+                 to fit each claim exactly
+
+      A StorageClass is also where performance tiers live. `fast-ssd` and
+      `standard` can point at completely different hardware while applications
+      keep asking in the same way.
+
+  - type: transition
+    text: |
+      One field decides whether two Pods can share a volume at all.

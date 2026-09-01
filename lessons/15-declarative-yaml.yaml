@@ -1,0 +1,130 @@
+id: declarative-yaml
+chapter: Configuration
+title: Stop Typing, Start Declaring
+concept: Declarative manifests
+
+intro: |
+  Everything you created with `kubectl create` and `kubectl expose` exists only
+  because you remembered the command.
+
+  A manifest is the same object, written down. `kubectl apply` makes the cluster
+  match the file - whether the object exists yet or not.
+
+files:
+  stack.yaml: |
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: site-config
+    data:
+      GREETING: hello
+    ---
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: site
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: site
+      template:
+        metadata:
+          labels:
+            app: site
+        spec:
+          containers:
+            - name: app
+              image: nginx:1.21
+              envFrom:
+                - configMapRef:
+                    name: site-config
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: site
+    spec:
+      selector:
+        app: site
+      ports:
+        - port: 80
+          targetPort: 80
+  stack-v2.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: site
+    spec:
+      replicas: 4
+      selector:
+        matchLabels:
+          app: site
+      template:
+        metadata:
+          labels:
+            app: site
+        spec:
+          containers:
+            - name: app
+              image: nginx:1.22
+              envFrom:
+                - configMapRef:
+                    name: site-config
+
+steps:
+  - type: observation
+    text: |
+      Open `stack.yaml` in the Manifests panel, or run `cat stack.yaml`.
+
+      Three objects in one file, separated by `---`: a ConfigMap, a Deployment
+      and a Service. Every one of them has the same four top-level fields:
+      apiVersion, kind, metadata, spec.
+
+  - type: challenge
+    prompt: Apply the whole stack with one command.
+    hint: kubectl apply -f stack.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: stack.yaml
+    reveal: Three objects created from one file.
+
+  - type: challenge
+    prompt: Apply the exact same file again.
+    hint: kubectl apply -f stack.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: stack.yaml
+    reveal: "\"unchanged\" - apply is idempotent. Running it twice is harmless."
+
+  - type: challenge
+    prompt: Now apply `stack-v2.yaml`, which changes replicas and the image.
+    hint: kubectl apply -f stack-v2.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: stack-v2.yaml
+    reveal: configured, not created. The same object was updated in place.
+
+  - type: challenge
+    prompt: Watch the result.
+    hint: kubectl get deploy
+    expected:
+      verb: get
+      resource: deployments
+
+  - type: explanation
+    text: |
+      Imperative commands describe *actions*: create this, scale that.
+      Manifests describe *state*: this is what should exist.
+
+      Only the second one can be reviewed, diffed, committed and replayed. In
+      real clusters the imperative commands are for exploration and emergencies;
+      everything that matters lives in a file.
+
+  - type: transition
+    text: |
+      So far every workload has been a Deployment. It is not always the right
+      controller.

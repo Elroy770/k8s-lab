@@ -1,0 +1,99 @@
+id: nodeselector
+chapter: Scheduling
+title: Telling the Scheduler Where to Put It
+concept: nodeSelector
+
+intro: |
+  By default the scheduler picks any node that fits. Sometimes that is wrong:
+  this workload needs the machine with the fast disks.
+
+  `nodeSelector` is the bluntest way to say so.
+
+files:
+  fast.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: indexer
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: indexer
+      template:
+        metadata:
+          labels:
+            app: indexer
+        spec:
+          nodeSelector:
+            disk: ssd
+          containers:
+            - name: app
+              image: nginx:1.22
+
+steps:
+  - type: challenge
+    prompt: Look at the labels your nodes currently have.
+    hint: kubectl get nodes -o wide
+    expected:
+      verb: get
+      resource: nodes
+    reveal: Only the built-in hostname label. Nothing says anything about disks.
+
+  - type: challenge
+    prompt: Deploy the indexer, which demands `disk=ssd`.
+    hint: kubectl apply -f fast.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: fast.yaml
+
+  - type: challenge
+    prompt: Check the Pods.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: Pending, with no NODE assigned. Nothing matches the selector.
+
+  - type: challenge
+    prompt: Label worker-2 as the SSD machine.
+    hint: kubectl label node worker-2 disk=ssd
+    expected:
+      verb: label
+      resource: nodes
+      name: worker-2
+
+  - type: challenge
+    prompt: Watch what the scheduler does about it.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: Both Pods landed on worker-2 the moment the label appeared.
+
+  - type: challenge
+    prompt: Now remove the label again.
+    hint: kubectl label node worker-2 disk-
+    expected:
+      verb: label
+      resource: nodes
+      name: worker-2
+    reveal: Running Pods stay put - nodeSelector is only checked at scheduling time.
+
+  - type: explanation
+    text: |
+      `nodeSelector` is an exact-match, all-or-nothing rule. Either a node has
+      every label you listed, or the Pod stays Pending forever.
+
+      That is its weakness: no "prefer", no "one of these", no "anywhere except".
+      A single typo in a label key produces a permanently unschedulable Pod with
+      no error other than Pending.
+
+  - type: transition
+    text: |
+      Node affinity is the same idea with grammar.

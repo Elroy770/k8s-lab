@@ -1,0 +1,104 @@
+id: ingress-basics
+chapter: Ingress
+title: One Entry Point for Everything
+concept: Ingress
+
+intro: |
+  An Ingress is an HTTP router that lives in front of your Services. One
+  external address, many applications behind it.
+
+  Note what an Ingress is *not*: it is not a Service type, and it does nothing
+  at all unless an ingress controller is running.
+
+initialState:
+  deployments:
+    - name: shop
+      replicas: 2
+      template:
+        image: nginx:1.22
+        labels:
+          app: shop
+  services:
+    - name: shop
+      selector:
+        app: shop
+      port: 80
+
+files:
+  ingress.yaml: |
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: shop
+    spec:
+      ingressClassName: nginx
+      rules:
+        - host: shop.local
+          http:
+            paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: shop
+                    port:
+                      number: 80
+
+steps:
+  - type: challenge
+    prompt: Confirm the Service works internally before adding anything in front of it.
+    hint: curl http://shop
+    expected:
+      verb: curl
+      contains: shop
+
+  - type: challenge
+    prompt: Now try the public hostname. It should not work yet.
+    hint: curl http://shop.local
+    allowError: true
+    expected:
+      verb: curl
+      contains: shop.local
+    reveal: Nothing is listening for that hostname.
+
+  - type: challenge
+    prompt: Create the Ingress.
+    hint: kubectl apply -f ingress.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: ingress.yaml
+
+  - type: challenge
+    prompt: Check that the controller assigned it an address.
+    hint: kubectl get ingress
+    expected:
+      verb: get
+      resource: ingresses
+    reveal: ADDRESS appears once the ingress controller has programmed the rule.
+
+  - type: challenge
+    prompt: Try the hostname again.
+    hint: curl http://shop.local
+    expected:
+      verb: curl
+      contains: shop.local
+    reveal: "Routed: ingress -> service -> pod."
+
+  - type: explanation
+    text: |
+      The full path a request now takes:
+
+          client -> ingress controller (one LoadBalancer)
+                 -> Ingress rule match on host/path
+                 -> Service
+                 -> Endpoints
+                 -> Pod
+
+      The Ingress object is only configuration. The thing doing the work is the
+      ingress controller Pod, which watches Ingress objects and reconfigures
+      itself. No controller installed means your rules are inert YAML.
+
+  - type: transition
+    text: |
+      One address, one app is not interesting. Add a second hostname.

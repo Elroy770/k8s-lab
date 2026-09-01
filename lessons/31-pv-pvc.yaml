@@ -1,0 +1,142 @@
+id: pv-pvc
+chapter: Storage
+title: Claiming Real Storage
+concept: PersistentVolume and PersistentVolumeClaim
+
+intro: |
+  Kubernetes splits storage into two objects on purpose:
+
+  - a PersistentVolume is a piece of storage that exists in the cluster
+  - a PersistentVolumeClaim is an application asking for storage
+
+  Developers write claims. Administrators (or a provisioner) supply volumes.
+
+initialState:
+  storageClasses:
+    - name: manual
+      provisioner: kubernetes.io/no-provisioner
+
+files:
+  pv.yaml: |
+    apiVersion: v1
+    kind: PersistentVolume
+    metadata:
+      name: pv-data
+    spec:
+      capacity:
+        storage: 5Gi
+      accessModes:
+        - ReadWriteOnce
+      storageClassName: manual
+  pvc.yaml: |
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: data-claim
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      storageClassName: manual
+      resources:
+        requests:
+          storage: 2Gi
+  app.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: notes
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: notes
+      template:
+        metadata:
+          labels:
+            app: notes
+        spec:
+          containers:
+            - name: app
+              image: nginx:1.22
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: data-claim
+
+steps:
+  - type: challenge
+    prompt: Create the PersistentVolume an administrator would provide.
+    hint: kubectl apply -f pv.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: pv.yaml
+
+  - type: challenge
+    prompt: Check its status.
+    hint: kubectl get pv
+    expected:
+      verb: get
+      resource: persistentvolumes
+    reveal: "Available - storage exists, but nobody has asked for it."
+
+  - type: challenge
+    prompt: Now create the claim your application will use.
+    hint: kubectl apply -f pvc.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: pvc.yaml
+
+  - type: challenge
+    prompt: Look at the claim.
+    hint: kubectl get pvc
+    expected:
+      verb: get
+      resource: persistentvolumeclaims
+    reveal: Bound. The control plane matched your 2Gi request to the 5Gi volume.
+
+  - type: challenge
+    prompt: Deploy an app that mounts the claim.
+    hint: kubectl apply -f app.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: app.yaml
+
+  - type: challenge
+    prompt: Write a file onto the persistent volume.
+    hint: "kubectl exec <paste-a-pod-name> -- sh -c \"echo survives-anything > /data/notes.txt\""
+    expected:
+      verb: exec
+      contains: /data/notes.txt
+
+  - type: challenge
+    prompt: Delete the Pod.
+    hint: "kubectl delete pod <paste-a-pod-name>"
+    expected:
+      verb: delete
+      resource: pods
+
+  - type: challenge
+    prompt: Read the file from the replacement Pod.
+    hint: "kubectl exec <paste-the-new-pod-name> -- cat /data/notes.txt"
+    expected:
+      verb: exec
+      contains: /data/notes.txt
+    reveal: Still there. The volume outlived the Pod entirely.
+
+  - type: explanation
+    text: |
+      Binding is a one-to-one matchmaking step: a claim binds to a volume that
+      has enough capacity, compatible access modes and the same storage class.
+
+      Once bound, that volume is reserved for that claim - even if the claim only
+      asked for 2Gi of a 5Gi volume. Storage is not shared by accident.
+
+  - type: transition
+    text: |
+      Creating volumes by hand does not scale. Let the cluster do it.

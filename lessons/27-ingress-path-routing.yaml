@@ -1,0 +1,110 @@
+id: ingress-path-routing
+chapter: Ingress
+title: Splitting One Site Into Services
+concept: Path-based routing
+
+intro: |
+  A single hostname, but `/api` should reach the backend and everything else
+  should reach the frontend.
+
+  This is how a monolithic URL space is served by independent Deployments.
+
+initialState:
+  deployments:
+    - name: frontend
+      replicas: 2
+      template:
+        image: nginx:1.22
+        labels:
+          app: frontend
+    - name: api
+      replicas: 2
+      template:
+        image: httpd:2.4
+        labels:
+          app: api
+  services:
+    - name: frontend
+      selector:
+        app: frontend
+      port: 80
+    - name: api
+      selector:
+        app: api
+      port: 80
+
+files:
+  paths.yaml: |
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: site
+    spec:
+      ingressClassName: nginx
+      rules:
+        - host: app.local
+          http:
+            paths:
+              - path: /api
+                pathType: Prefix
+                backend:
+                  service:
+                    name: api
+                    port:
+                      number: 80
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: frontend
+                    port:
+                      number: 80
+
+steps:
+  - type: challenge
+    prompt: Apply the path-based Ingress.
+    hint: kubectl apply -f paths.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: paths.yaml
+
+  - type: challenge
+    prompt: Request the site root.
+    hint: curl http://app.local/
+    expected:
+      verb: curl
+      contains: app.local
+    reveal: The `/` rule sent you to the frontend (nginx).
+
+  - type: challenge
+    prompt: Now request an API path.
+    hint: curl http://app.local/api/users
+    expected:
+      verb: curl
+      contains: /api
+    reveal: The longer prefix wins - httpd answered this one.
+
+  - type: challenge
+    prompt: Look at how the rules are recorded.
+    hint: kubectl describe ingress site
+    expected:
+      verb: describe
+      resource: ingresses
+      name: site
+    reveal: Each rule shows its backend Service and how many endpoints it has.
+
+  - type: explanation
+    text: |
+      Two things decide where a request goes:
+
+      - `pathType: Prefix` matches whole path segments, and the *longest*
+        matching rule wins - which is why `/api/users` chose `/api` over `/`
+      - the backend must be a Service name in the same namespace
+
+      A very common production bug: the frontend rule `/` is written first and
+      the team assumes order matters. It does not - specificity does.
+
+  - type: transition
+    text: |
+      Now the part you will actually spend time on: an Ingress that does not work.

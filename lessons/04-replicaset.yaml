@@ -1,0 +1,78 @@
+id: replicaset
+chapter: Workloads
+title: A Controller That Never Stops Counting
+concept: ReplicaSet, selectors, desired state
+
+intro: |
+  A ReplicaSet holds one number: how many Pods matching its selector should
+  exist. A control loop compares that number to reality, forever.
+
+  This time you will declare it in a file instead of typing an imperative
+  command, because that is how real clusters are run.
+
+files:
+  replicaset.yaml: |
+    apiVersion: apps/v1
+    kind: ReplicaSet
+    metadata:
+      name: web
+    spec:
+      replicas: 3
+      selector:
+        matchLabels:
+          app: web
+      template:
+        metadata:
+          labels:
+            app: web
+        spec:
+          containers:
+            - name: app
+              image: nginx:1.21
+
+steps:
+  - type: observation
+    text: |
+      Read `replicaset.yaml` in the Manifests panel on the right (or run
+      `cat replicaset.yaml`).
+
+      Notice `selector.matchLabels` and the labels on the Pod template. The
+      ReplicaSet does not track Pods by name — it tracks anything wearing the
+      label `app=web`.
+
+  - type: challenge
+    prompt: Apply the manifest.
+    hint: kubectl apply -f replicaset.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: replicaset.yaml
+    reveal: One object created — and three Pods appeared out of it.
+
+  - type: challenge
+    prompt: Look at the ReplicaSet itself.
+    hint: kubectl get rs
+    expected:
+      verb: get
+      resource: replicasets
+    reveal: DESIRED 3, CURRENT 3, READY 3. That gap is the whole job.
+
+  - type: challenge
+    prompt: List the Pods it produced.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: Random name suffixes — these Pods are interchangeable cattle.
+
+  - type: explanation
+    text: |
+      You never created a Pod. You created an *intent*, and the ReplicaSet
+      controller turned that intent into Pods.
+
+      The names are generated because no individual Pod matters here. What
+      matters is that three of them exist with the label `app=web`.
+
+  - type: transition
+    text: |
+      Now break one on purpose.

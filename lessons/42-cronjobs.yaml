@@ -1,0 +1,99 @@
+id: cronjobs
+chapter: Jobs
+title: Work On a Schedule
+concept: CronJob
+
+intro: |
+  A CronJob is a Job factory. On every tick of its schedule it creates a fresh
+  Job, which creates a fresh Pod.
+
+  Three objects, one per layer - exactly like Deployment → ReplicaSet → Pod.
+
+files:
+  backup.yaml: |
+    apiVersion: batch/v1
+    kind: CronJob
+    metadata:
+      name: backup
+    spec:
+      schedule: "*/1 * * * *"
+      jobTemplate:
+        spec:
+          template:
+            metadata:
+              labels:
+                app: backup
+            spec:
+              restartPolicy: OnFailure
+              containers:
+                - name: app
+                  image: backup:1.0
+
+steps:
+  - type: challenge
+    prompt: Create a CronJob that runs every minute.
+    hint: kubectl apply -f backup.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: backup.yaml
+
+  - type: challenge
+    prompt: Look at the CronJob itself.
+    hint: kubectl get cronjobs
+    expected:
+      verb: get
+      resource: cronjobs
+    reveal: "LAST SCHEDULE is <none> until the first tick fires."
+
+  - type: observation
+    text: |
+      Leave it alone for a moment and watch the cluster panel.
+
+      The CronJob controller is comparing the clock to the schedule, and will
+      create a Job the instant it is due.
+
+  - type: challenge
+    prompt: After a tick or two, list the Jobs it created.
+    hint: kubectl get jobs
+    expected:
+      verb: get
+      resource: jobs
+    reveal: Each run is a separate Job object with its own timestamped name.
+
+  - type: challenge
+    prompt: And the Pods behind those Jobs.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: Completed Pods accumulate - a run history you can still read logs from.
+
+  - type: challenge
+    prompt: Stop the schedule by deleting the CronJob.
+    hint: kubectl delete cronjob backup
+    expected:
+      verb: delete
+      resource: cronjobs
+      name: backup
+    reveal: No more Jobs will be created. Existing ones are untouched.
+
+  - type: explanation
+    text: |
+      The ownership chain again:
+
+          CronJob   -> creates a Job on schedule
+          Job       -> creates Pods until it completes
+          Pod       -> does the work once
+
+      Things that bite people in production:
+
+      - schedules are UTC unless you set a time zone
+      - a slow run can overlap the next one; `concurrencyPolicy` decides whether
+        that is allowed, skipped or forbidden
+      - history limits control how many finished Jobs are kept - the default
+        keeps enough to debug, not enough to fill etcd
+
+  - type: transition
+    text: |
+      You have now created every workload type. Time to learn to see inside them.

@@ -1,0 +1,70 @@
+id: deployment
+chapter: Workloads
+title: Who Owns Whom
+concept: Deployment → ReplicaSet → Pod
+
+intro: |
+  A Deployment does not run containers. It manages ReplicaSets, and the
+  ReplicaSet manages Pods.
+
+  Build one and follow the chain of ownership downwards.
+
+steps:
+  - type: challenge
+    prompt: Create a Deployment called `web` with 3 replicas of `nginx:1.21`.
+    hint: kubectl create deployment web --image=nginx:1.21 --replicas=3
+    expected:
+      verb: create
+      resource: deployments
+      name: web
+      flags:
+        image: true
+    reveal: One command, three objects.
+
+  - type: challenge
+    prompt: Look at the Deployment.
+    hint: kubectl get deploy
+    expected:
+      verb: get
+      resource: deployments
+
+  - type: challenge
+    prompt: Now look at the ReplicaSets. You never created one.
+    hint: kubectl get rs
+    expected:
+      verb: get
+      resource: replicasets
+    reveal: "web-<hash> — the suffix is a hash of the Pod template."
+
+  - type: challenge
+    prompt: And the Pods underneath.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+
+  - type: challenge
+    prompt: Ask a Pod who controls it.
+    hint: "kubectl describe pod <paste-a-pod-name>"
+    expected:
+      verb: describe
+      resource: pods
+    reveal: "Controlled By: ReplicaSet/web-<hash>"
+
+  - type: explanation
+    text: |
+      Three objects, one chain of ownership:
+
+          Deployment  (what I want, and how to change it safely)
+              ↓ owns
+          ReplicaSet  (how many of this exact template)
+              ↓ owns
+          Pods        (the actual containers)
+
+      Each layer only talks to the layer below it. That hash in the ReplicaSet
+      name identifies one specific Pod template — change the template and you
+      get a different hash, which means a different ReplicaSet.
+
+  - type: transition
+    text: |
+      Which is exactly what happens during a release. Let's do one.

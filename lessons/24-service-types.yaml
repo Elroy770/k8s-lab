@@ -1,0 +1,90 @@
+id: service-types
+chapter: Services
+title: Four Ways to Be Reached
+concept: ClusterIP, NodePort, LoadBalancer, headless
+
+intro: |
+  There is one Service object with several behaviours, and they build on each
+  other rather than replacing each other.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 2
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+  services:
+    - name: web-internal
+      selector:
+        app: web
+      port: 80
+
+files:
+  lb.yaml: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: web-public
+    spec:
+      type: LoadBalancer
+      selector:
+        app: web
+      ports:
+        - port: 80
+          targetPort: 80
+
+steps:
+  - type: challenge
+    prompt: Start from what you have - list the Services.
+    hint: kubectl get svc
+    expected:
+      verb: get
+      resource: services
+    reveal: One ClusterIP, internal only.
+
+  - type: challenge
+    prompt: Add a LoadBalancer Service in front of the same Pods.
+    hint: kubectl apply -f lb.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: lb.yaml
+
+  - type: challenge
+    prompt: Compare the two.
+    hint: kubectl get svc
+    expected:
+      verb: get
+      resource: services
+    reveal: The LoadBalancer got an EXTERNAL-IP and still has a ClusterIP and a node port.
+
+  - type: challenge
+    prompt: Confirm both routes reach the same Pods.
+    hint: curl http://web-public
+    expected:
+      verb: curl
+      contains: web-public
+
+  - type: explanation
+    text: |
+      Each type is the previous one plus something:
+
+      - ClusterIP     internal virtual IP. The default, and the foundation.
+      - NodePort      ClusterIP + a port on every node.
+      - LoadBalancer  NodePort + an external address from the cloud provider.
+      - ExternalName  no proxying at all, just a DNS CNAME to something outside.
+
+      And separately, `clusterIP: None` makes a *headless* Service: no virtual
+      IP, no load balancing, just DNS records for the individual Pods. That is
+      what StatefulSets use.
+
+  - type: observation
+    text: |
+      One LoadBalancer per application gets expensive fast - each one is a real
+      cloud load balancer with a real bill.
+
+  - type: transition
+    text: |
+      The usual answer is a single entry point that routes by hostname and path.

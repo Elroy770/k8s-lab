@@ -1,0 +1,128 @@
+id: ingress-troubleshooting
+chapter: Ingress
+title: Why Is My Ingress Returning 503?
+concept: Ingress failure modes
+
+intro: |
+  The site is down. The Deployment is healthy, the Service has endpoints, and
+  the Ingress exists.
+
+  Work the chain from the outside in.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 2
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+  services:
+    - name: web
+      selector:
+        app: web
+      port: 80
+  ingresses:
+    - name: site
+      className: nginx
+      rules:
+        - host: app.local
+          path: /
+          service: web-service
+          port: 80
+
+files:
+  fixed.yaml: |
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: site
+    spec:
+      ingressClassName: nginx
+      rules:
+        - host: app.local
+          http:
+            paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: web
+                    port:
+                      number: 80
+
+steps:
+  - type: challenge
+    prompt: Reproduce the failure.
+    hint: curl http://app.local
+    allowError: true
+    expected:
+      verb: curl
+      contains: app.local
+    reveal: 503, and the error names the Service the Ingress is looking for.
+
+  - type: challenge
+    prompt: Check whether the Pods themselves are fine.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: Two healthy Pods. The problem is not the workload.
+
+  - type: challenge
+    prompt: Check the Service directly, bypassing the Ingress.
+    hint: curl http://web
+    expected:
+      verb: curl
+      contains: web
+    reveal: The Service works. So the break is between Ingress and Service.
+
+  - type: challenge
+    prompt: Read the Ingress rules.
+    hint: kubectl describe ingress site
+    expected:
+      verb: describe
+      resource: ingresses
+      name: site
+    reveal: "The backend is `web-service`. No such Service exists - it is called `web`."
+
+  - type: challenge
+    prompt: Replace the broken Ingress.
+    hint: kubectl delete ingress site
+    expected:
+      verb: delete
+      resource: ingresses
+      name: site
+
+  - type: challenge
+    prompt: Apply the corrected one.
+    hint: kubectl apply -f fixed.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: fixed.yaml
+
+  - type: challenge
+    prompt: Verify.
+    hint: curl http://app.local
+    expected:
+      verb: curl
+      contains: app.local
+    reveal: Back to 200.
+
+  - type: explanation
+    text: |
+      An Ingress 503 has only a few possible causes, and they are easy to walk
+      in order:
+
+      - no ADDRESS on the Ingress -> no ingress controller is running
+      - backend Service name is wrong -> `describe ingress` shows it
+      - Service exists but has no endpoints -> selector or readiness problem
+      - wrong `ingressClassName` -> the controller ignores your object entirely
+
+      Debug outside-in: curl the host, curl the Service, check endpoints, check
+      Pods. The layer where it starts working is the layer that is broken.
+
+  - type: transition
+    text: |
+      Networking done. Now the other thing Pods lose when they die: data.

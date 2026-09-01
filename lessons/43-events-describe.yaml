@@ -1,0 +1,102 @@
+id: events-describe
+chapter: Observability
+title: Asking the Cluster What Happened
+concept: Events and describe
+
+intro: |
+  When something is wrong, `kubectl get` tells you *that* it is wrong. Events
+  and `describe` tell you *why*.
+
+  Two Deployments here are unhappy. Diagnose both without guessing.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 2
+      template:
+        image: nginx:1.99
+        labels:
+          app: web
+    - name: worker
+      replicas: 1
+      template:
+        image: nginx:1.22
+        labels:
+          app: worker
+        nodeSelector:
+          disk: nvme
+
+steps:
+  - type: challenge
+    prompt: Get the overall picture first.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: One ImagePullBackOff, one stuck in Pending. Two different problems.
+
+  - type: challenge
+    prompt: Read the cluster's event stream.
+    hint: kubectl get events
+    expected:
+      verb: get
+      resource: events
+    reveal: Warnings name the failing image directly.
+
+  - type: challenge
+    prompt: Describe the Pod that cannot pull its image.
+    hint: "kubectl describe pod <paste-a-web-pod-name>"
+    expected:
+      verb: describe
+      resource: pods
+    reveal: "The Reason line spells it out: the tag does not exist."
+
+  - type: challenge
+    prompt: Now describe the Pod that never got scheduled.
+    hint: "kubectl describe pod <paste-a-worker-pod-name>"
+    expected:
+      verb: describe
+      resource: pods
+    reveal: "Unschedulable, and Node-Selectors shows disk=nvme."
+
+  - type: challenge
+    prompt: Confirm no node carries that label.
+    hint: kubectl get nodes -o wide
+    expected:
+      verb: get
+      resource: nodes
+
+  - type: challenge
+    prompt: Fix the scheduling problem.
+    hint: kubectl label node worker-1 disk=nvme
+    expected:
+      verb: label
+      resource: nodes
+      name: worker-1
+    reveal: The pending Pod schedules within a tick.
+
+  - type: challenge
+    prompt: Fix the image problem.
+    hint: kubectl set image deployment/web app=nginx:1.22
+    expected:
+      verb: set
+      subcommand: image
+      resource: deployments
+      name: web
+
+  - type: explanation
+    text: |
+      A reliable triage order:
+
+      1. `get pods` - what state, how many restarts?
+      2. `describe pod` - Reason, Node-Selectors, probes, mounts, Events
+      3. `get events` - what the controllers have been saying cluster-wide
+      4. `logs` - only once you know the container actually started
+
+      Events are the cheapest signal in Kubernetes and the most ignored. They
+      also expire, which is why a problem reported hours later is harder to
+      diagnose than the same problem reported now.
+
+  - type: transition
+    text: |
+      Events explain the platform. Logs explain the application.

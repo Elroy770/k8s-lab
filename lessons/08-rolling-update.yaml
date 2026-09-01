@@ -1,0 +1,75 @@
+id: rolling-update
+chapter: Workloads
+title: A Release Without Downtime
+concept: Rolling update, maxSurge, two ReplicaSets
+
+intro: |
+  Your `web` Deployment runs 3 Pods on `nginx:1.21`.
+
+  Ship `nginx:1.22` and keep the site up the whole time.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 3
+      template:
+        image: nginx:1.21
+        labels:
+          app: web
+
+steps:
+  - type: challenge
+    prompt: Update the Deployment's container image to `nginx:1.22`.
+    hint: kubectl set image deployment/web app=nginx:1.22
+    expected:
+      verb: set
+      subcommand: image
+      resource: deployments
+      name: web
+    reveal: Watch the cluster panel — a second ReplicaSet just appeared.
+
+  - type: challenge
+    prompt: Look at the ReplicaSets while the rollout is in flight.
+    hint: kubectl get rs
+    expected:
+      verb: get
+      resource: replicasets
+    reveal: Two ReplicaSets. One is filling up, the other is draining.
+
+  - type: challenge
+    prompt: Ask the Deployment whether the rollout finished.
+    hint: kubectl rollout status deployment/web
+    expected:
+      verb: rollout
+      subcommand: status
+      resource: deployments
+
+  - type: challenge
+    prompt: Check which image the Pods are running now.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+
+  - type: explanation
+    text: |
+      The Deployment never edited a Pod. It created a *new* ReplicaSet for the
+      new template and then moved the replica count from the old one to the new
+      one, one Pod at a time:
+
+          old rs: 3 → 3 → 2 → 1 → 0
+          new rs: 0 → 1 → 2 → 3 → 3
+
+      A new Pod only counts once it is Ready, and the old Pod is only removed
+      after that. That ordering is what keeps traffic served during a release.
+
+  - type: observation
+    text: |
+      Notice the old ReplicaSet is still there, sitting at 0 replicas. It was
+      not deleted.
+
+  - type: transition
+    text: |
+      That leftover is not garbage. It is your undo button.

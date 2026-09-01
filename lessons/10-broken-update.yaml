@@ -1,0 +1,76 @@
+id: broken-update
+chapter: Workloads
+title: Ship Something Broken
+concept: Failed rollouts and why they stall
+
+intro: |
+  Rolling updates protect you from your own mistakes — but only if you
+  understand what a stalled rollout looks like.
+
+  Push an image tag that does not exist in the registry.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 3
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+      previousImages:
+        - nginx:1.21
+
+steps:
+  - type: challenge
+    prompt: Set the Deployment image to `nginx:1.99` (a tag nobody ever published).
+    hint: kubectl set image deployment/web app=nginx:1.99
+    expected:
+      verb: set
+      subcommand: image
+      resource: deployments
+      name: web
+    reveal: A new ReplicaSet was created and it started one Pod.
+
+  - type: challenge
+    prompt: Look at the Pods. What state is the new one in?
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: ImagePullBackOff — the kubelet cannot pull that tag.
+
+  - type: challenge
+    prompt: Ask the cluster why.
+    hint: kubectl get events
+    expected:
+      verb: get
+      resource: events
+    reveal: "Warning / Failed: image not found in registry."
+
+  - type: challenge
+    prompt: Ask the Deployment about the rollout.
+    hint: kubectl rollout status deployment/web
+    expected:
+      verb: rollout
+      subcommand: status
+      resource: deployments
+    reveal: Stuck at 0 of 3 updated replicas available.
+
+  - type: observation
+    text: |
+      Count the healthy Pods. Three of them are still running `nginx:1.22` and
+      still serving traffic.
+
+      The rollout is frozen, not catastrophic.
+
+  - type: explanation
+    text: |
+      The Deployment refuses to remove an old Pod until a new Pod is Ready. The
+      new Pod never becomes Ready, so the old ReplicaSet is never scaled down.
+
+      A broken image therefore costs you a stuck release, not an outage. This is
+      the single most valuable behaviour to internalise about Deployments.
+
+  - type: transition
+    text: |
+      Now get out of it.

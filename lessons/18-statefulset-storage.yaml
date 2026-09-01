@@ -1,0 +1,85 @@
+id: statefulset-storage
+chapter: Workload Types
+title: A Disk That Follows the Pod
+concept: volumeClaimTemplates
+
+intro: |
+  Your `db` StatefulSet is running with a volume claim template, so every Pod
+  got its own PersistentVolumeClaim.
+
+  Let's prove the disk really outlives the Pod.
+
+initialState:
+  storageClasses:
+    - name: standard
+      provisioner: lab.local/dynamic
+      isDefault: true
+  statefulSets:
+    - name: db
+      replicas: 2
+      selector:
+        app: db
+      serviceName: db
+      template:
+        image: postgres:16
+        labels:
+          app: db
+        mounts:
+          - name: data
+            mountPath: /data
+      volumeClaimTemplate:
+        name: data
+        requestGi: 1
+
+steps:
+  - type: challenge
+    prompt: List the PersistentVolumeClaims.
+    hint: kubectl get pvc
+    expected:
+      verb: get
+      resource: persistentvolumeclaims
+    reveal: "data-db-0 and data-db-1 - one claim per Pod, named after its ordinal."
+
+  - type: challenge
+    prompt: Write a file onto db-0's volume.
+    hint: "kubectl exec db-0 -- sh -c \"echo customer-records > /data/db.txt\""
+    expected:
+      verb: exec
+      contains: /data/db.txt
+
+  - type: challenge
+    prompt: Read it back to be sure it is there.
+    hint: "kubectl exec db-0 -- cat /data/db.txt"
+    expected:
+      verb: exec
+      contains: cat
+
+  - type: challenge
+    prompt: Now destroy the Pod.
+    hint: kubectl delete pod db-0
+    expected:
+      verb: delete
+      resource: pods
+      name: db-0
+    reveal: The StatefulSet recreates db-0 and reattaches the same claim.
+
+  - type: challenge
+    prompt: Read the file from the brand new Pod.
+    hint: "kubectl exec db-0 -- cat /data/db.txt"
+    expected:
+      verb: exec
+      contains: /data/db.txt
+    reveal: The data survived. New container, same volume.
+
+  - type: explanation
+    text: |
+      `volumeClaimTemplates` is what makes a StatefulSet stateful. Each ordinal
+      gets a claim named `<template>-<pod>`, and that claim is never deleted
+      when the Pod is.
+
+      Deleting the StatefulSet does not delete the claims either - which is a
+      feature, not a bug, the day someone deletes the wrong thing.
+
+  - type: transition
+    text: |
+      You now have four controllers. Time to decide which is which.

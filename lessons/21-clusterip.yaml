@@ -1,0 +1,77 @@
+id: clusterip
+chapter: Services
+title: A Stable Front Door
+concept: ClusterIP and Endpoints
+
+intro: |
+  A Service is a stable virtual IP plus a DNS name, backed by whichever Pods
+  currently match its label selector.
+
+  Nothing more magical than that - but the selector is everything.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 3
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+
+steps:
+  - type: challenge
+    prompt: Expose the `web` Deployment on port 80.
+    hint: kubectl expose deployment web --port=80 --target-port=80
+    expected:
+      verb: expose
+      resource: deployments
+      name: web
+
+  - type: challenge
+    prompt: Look at the Service you just created.
+    hint: kubectl get svc
+    expected:
+      verb: get
+      resource: services
+    reveal: A ClusterIP from the service network - reachable only inside the cluster.
+
+  - type: challenge
+    prompt: Ask which Pods are actually behind it.
+    hint: kubectl get endpoints
+    expected:
+      verb: get
+      resource: endpoints
+    reveal: Three Pod IPs. The Endpoints object is the live membership list.
+
+  - type: challenge
+    prompt: Send a request to the Service by name.
+    hint: curl http://web
+    expected:
+      verb: curl
+      contains: web
+    reveal: Answered by one of the Pods. Run it again to hit a different one.
+
+  - type: challenge
+    prompt: Now delete one of the Pods and check the endpoints again.
+    hint: kubectl get endpoints
+    expected:
+      verb: get
+      resource: endpoints
+
+  - type: explanation
+    text: |
+      The chain is short and worth memorising:
+
+          Service (name + ClusterIP)
+              ↓ label selector
+          Endpoints (IPs of Ready Pods)
+              ↓
+          kube-proxy rules on every node
+
+      Note the word *Ready*. A Pod that exists but fails its readiness probe is
+      removed from Endpoints automatically - that is how rolling updates avoid
+      sending traffic into a half-started container.
+
+  - type: transition
+    text: |
+      When a Service returns nothing, the selector is almost always the culprit.

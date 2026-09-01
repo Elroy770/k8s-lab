@@ -1,0 +1,69 @@
+id: why-services
+chapter: Services
+title: The IP You Cannot Trust
+concept: Why Services exist
+
+intro: |
+  Every Pod gets its own IP address. It sounds convenient until you try to use
+  one.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 3
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+
+steps:
+  - type: challenge
+    prompt: List the Pods with their IP addresses. Write one of them down.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+
+  - type: challenge
+    prompt: Delete the Pod whose IP you noted.
+    hint: "kubectl delete pod <paste-a-pod-name>"
+    expected:
+      verb: delete
+      resource: pods
+
+  - type: challenge
+    prompt: List them again and compare.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: New Pod, new name, new IP. Anything hard-coding that IP is now broken.
+
+  - type: challenge
+    prompt: Try to reach the old address by name anyway.
+    hint: curl http://web
+    allowError: true
+    expected:
+      verb: curl
+    reveal: "Could not resolve host - there is nothing stable to talk to yet."
+
+  - type: explanation
+    text: |
+      Pod IPs are as disposable as the Pods themselves. Every rollout, crash,
+      scale event or node failure changes them.
+
+      What you need is one name and one address that:
+
+      - never changes
+      - automatically tracks whichever Pods are currently healthy
+      - spreads traffic across them
+
+      That object is a Service.
+
+  - type: transition
+    text: |
+      Let's give these Pods a front door.

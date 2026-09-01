@@ -1,267 +1,343 @@
-export interface ParsedCommand {
-  raw: string;
-  isKubectl: boolean;
-  isShellCommand: boolean;
-  shellCmd?: string;
-  verb: string;
+import type { ParsedCommand } from "./types";
+
+/**
+ * Semantic kubectl parser.
+ *
+ * Commands are never compared as strings. They are tokenised and normalised
+ * into { verb, subcommand, resource, names, flags } so that `kubectl get po`,
+ * `kubectl get pod` and `kubectl get pods` all mean the same thing.
+ */
+
+const RESOURCE_ALIASES: Record<string, string> = {
+  po: "pods",
+  pod: "pods",
+  pods: "pods",
+  rs: "replicasets",
+  replicaset: "replicasets",
+  replicasets: "replicasets",
+  deploy: "deployments",
+  deployment: "deployments",
+  deployments: "deployments",
+  ds: "daemonsets",
+  daemonset: "daemonsets",
+  daemonsets: "daemonsets",
+  sts: "statefulsets",
+  statefulset: "statefulsets",
+  statefulsets: "statefulsets",
+  job: "jobs",
+  jobs: "jobs",
+  cj: "cronjobs",
+  cronjob: "cronjobs",
+  cronjobs: "cronjobs",
+  svc: "services",
+  service: "services",
+  services: "services",
+  ep: "endpoints",
+  endpoint: "endpoints",
+  endpoints: "endpoints",
+  ing: "ingresses",
+  ingress: "ingresses",
+  ingresses: "ingresses",
+  cm: "configmaps",
+  configmap: "configmaps",
+  configmaps: "configmaps",
+  secret: "secrets",
+  secrets: "secrets",
+  pv: "persistentvolumes",
+  persistentvolume: "persistentvolumes",
+  persistentvolumes: "persistentvolumes",
+  pvc: "persistentvolumeclaims",
+  persistentvolumeclaim: "persistentvolumeclaims",
+  persistentvolumeclaims: "persistentvolumeclaims",
+  sc: "storageclasses",
+  storageclass: "storageclasses",
+  storageclasses: "storageclasses",
+  no: "nodes",
+  node: "nodes",
+  nodes: "nodes",
+  ns: "namespaces",
+  namespace: "namespaces",
+  namespaces: "namespaces",
+  ev: "events",
+  event: "events",
+  events: "events",
+  all: "all",
+};
+
+const VERB_ALIASES: Record<string, string> = {
+  get: "get",
+  describe: "describe",
+  delete: "delete",
+  del: "delete",
+  run: "run",
+  create: "create",
+  apply: "apply",
+  edit: "edit",
+  scale: "scale",
+  set: "set",
+  label: "label",
+  taint: "taint",
+  annotate: "annotate",
+  expose: "expose",
+  rollout: "rollout",
+  logs: "logs",
+  exec: "exec",
+  explain: "explain",
+  top: "top",
+  patch: "patch",
+};
+
+const VERBS_WITH_SUBCOMMAND = new Set(["rollout", "set", "create"]);
+
+export function normaliseResource(word: string | undefined): string | undefined {
+  if (!word) return undefined;
+  return RESOURCE_ALIASES[word.toLowerCase()];
+}
+
+function tokenize(line: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+
+  for (const char of line.trim()) {
+    if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) tokens.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+/** Flags that consume the following token as their value. */
+const VALUE_FLAGS = new Set([
+  "-o",
+  "--output",
+  "-l",
+  "--selector",
+  "-n",
+  "--namespace",
+  "-f",
+  "--filename",
+  "-c",
+  "--container",
+  "--image",
+  "--replicas",
+  "--to-revision",
+  "--labels",
+  "--port",
+  "--target-port",
+  "--node-port",
+  "--type",
+  "--name",
+  "--from-literal",
+  "--from-file",
+  "--schedule",
+  "--overrides",
+  "--tail",
+]);
+
+const FLAG_ALIASES: Record<string, string> = {
+  "-o": "output",
+  "--output": "output",
+  "-l": "selector",
+  "--selector": "selector",
+  "-n": "namespace",
+  "--namespace": "namespace",
+  "-f": "filename",
+  "--filename": "filename",
+  "-c": "container",
+  "--container": "container",
+  "-w": "watch",
+  "--watch": "watch",
+  "-A": "all-namespaces",
+  "--all-namespaces": "all-namespaces",
+  "-it": "interactive",
+  "-i": "interactive",
+  "-t": "tty",
+};
+
+const REPEATABLE = new Set(["from-literal", "from-file"]);
+
+function flagName(raw: string): string {
+  return FLAG_ALIASES[raw] ?? raw.replace(/^--?/, "");
+}
+
+export function parseCommand(raw: string): ParsedCommand {
+  const base: ParsedCommand = {
+    raw: raw.trim(),
+    ok: false,
+    verb: "",
+    names: [],
+    execArgs: [],
+    flags: {},
+    repeated: {},
+  };
+
+  const tokens = tokenize(raw);
+  if (tokens.length === 0) return { ...base, error: "empty command" };
+
+  const binary = tokens[0].toLowerCase();
+  const isKubectl = binary === "kubectl" || binary === "k";
+  const isShellTool = binary === "curl" || binary === "wget" || binary === "cat";
+  if (!isKubectl && !isShellTool) {
+    return {
+      ...base,
+      error: `${tokens[0]}: command not found. This lab speaks kubectl (plus curl, cat and help).`,
+    };
+  }
+
+  const separator = tokens.indexOf("--");
+  const execArgs = separator === -1 ? [] : tokens.slice(separator + 1);
+  const rest = tokens.slice(1, separator === -1 ? undefined : separator);
+
+  const positional: string[] = [];
+  const flags: Record<string, string | boolean> = {};
+  const repeated: Record<string, string[]> = {};
+
+  const remember = (key: string, value: string | boolean) => {
+    flags[key] = value;
+    if (REPEATABLE.has(key) && typeof value === "string") {
+      repeated[key] = [...(repeated[key] ?? []), value];
+    }
+  };
+
+  for (let i = 0; i < rest.length; i++) {
+    const token = rest[i];
+    if (!token.startsWith("-")) {
+      positional.push(token);
+      continue;
+    }
+    if (token.includes("=")) {
+      const [key, ...valueParts] = token.split("=");
+      remember(flagName(key), valueParts.join("="));
+      continue;
+    }
+    if (VALUE_FLAGS.has(token) && i + 1 < rest.length && !rest[i + 1].startsWith("-")) {
+      remember(flagName(token), rest[i + 1]);
+      i++;
+      continue;
+    }
+    remember(flagName(token), true);
+  }
+
+  if (isShellTool) {
+    return {
+      ...base,
+      ok: true,
+      verb: binary === "wget" ? "curl" : binary,
+      names: positional,
+      execArgs,
+      flags,
+      repeated,
+    };
+  }
+
+  if (positional.length === 0) {
+    return { ...base, flags, repeated, error: "kubectl needs a verb, e.g. `kubectl get pods`." };
+  }
+
+  const verb = VERB_ALIASES[positional[0].toLowerCase()];
+  if (!verb) {
+    return {
+      ...base,
+      flags,
+      repeated,
+      error: `unknown command "${positional[0]}" for "kubectl". Type "help" to see what this lab supports.`,
+    };
+  }
+
+  let index = 1;
+  let subcommand: string | undefined;
+  if (VERBS_WITH_SUBCOMMAND.has(verb) && positional[index]) {
+    const candidate = positional[index].toLowerCase();
+    const resolvesToResource = Boolean(normaliseResource(candidate));
+    // `create deployment` is a resource; `create secret` is a subcommand.
+    if (verb === "create" && resolvesToResource && candidate !== "secret" && candidate !== "secrets") {
+      subcommand = undefined;
+    } else {
+      subcommand = candidate;
+      index++;
+    }
+  }
+
+  let resource: string | undefined;
+  const names: string[] = [];
+
+  for (; index < positional.length; index++) {
+    const token = positional[index];
+    if (token.includes("/")) {
+      const [kind, name] = token.split("/");
+      const resolved = normaliseResource(kind);
+      if (resolved) {
+        resource = resource ?? resolved;
+        if (name) names.push(name);
+        continue;
+      }
+    }
+    const resolved = normaliseResource(token);
+    if (resolved && !resource) {
+      resource = resolved;
+      continue;
+    }
+    names.push(token);
+  }
+
+  return { raw: raw.trim(), ok: true, verb, subcommand, resource, names, execArgs, flags, repeated };
+}
+
+export interface ExpectedCommand {
+  verb?: string;
+  subcommand?: string;
   resource?: string;
   name?: string;
-  flags: Record<string, string | boolean>;
-  args: string[];
-  file?: string;
-  redirectToFile?: string;
-  redirectFile?: string;
-  outputFormat?: string;
-  subVerb?: string;
+  /** Flags that must be present; `true` means "present with any value". */
+  flags?: Record<string, string | number | boolean>;
+  /** A substring that must appear in the raw command, for exec/curl style steps. */
+  contains?: string;
+  /** Any of these alternatives satisfies the step. */
+  anyOf?: ExpectedCommand[];
 }
 
-export function normalizeResource(res: string): string {
-  const r = res.toLowerCase();
-  if (["pod", "pods", "po"].includes(r)) return "pod";
-  if (["replicaset", "replicasets", "rs"].includes(r)) return "replicaset";
-  if (["deployment", "deployments", "deploy"].includes(r)) return "deployment";
-  if (["daemonset", "daemonsets", "ds"].includes(r)) return "daemonset";
-  if (["statefulset", "statefulsets", "sts"].includes(r)) return "statefulset";
-  if (["job", "jobs"].includes(r)) return "job";
-  if (["cronjob", "cronjobs", "cj"].includes(r)) return "cronjob";
-  if (["service", "services", "svc"].includes(r)) return "service";
-  if (["namespace", "namespaces", "ns"].includes(r)) return "namespace";
-  if (["node", "nodes", "no"].includes(r)) return "node";
-  if (["configmap", "configmaps", "cm"].includes(r)) return "configmap";
-  if (["secret", "secrets", "sec"].includes(r)) return "secret";
-  if (["event", "events", "ev"].includes(r)) return "events";
-  if (["all"].includes(r)) return "all";
-  return r;
-}
-
-export function parseCommand(input: string): ParsedCommand {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return { raw: input, isKubectl: false, isShellCommand: false, verb: "", flags: {}, args: [] };
+/** Intent-based matching: does this command satisfy what the lesson asked for? */
+export function matchesExpectation(
+  parsed: ParsedCommand,
+  expected: ExpectedCommand,
+): boolean {
+  if (expected.anyOf?.length) {
+    return expected.anyOf.some((alternative) => matchesExpectation(parsed, alternative));
   }
-
-  let commandStr = trimmed;
-  let redirectToFile: string | undefined;
-
-  // Handle redirection e.g. > pod.yaml or >> pod.yaml
-  const redirectMatch = commandStr.match(/(?:>>|>)\s*([^\s]+)\s*$/);
-  if (redirectMatch) {
-    redirectToFile = redirectMatch[1];
-    commandStr = commandStr.slice(0, redirectMatch.index).trim();
+  if (expected.contains && !parsed.raw.toLowerCase().includes(expected.contains.toLowerCase())) {
+    return false;
   }
-
-  const tokens = commandStr.split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) {
-    return {
-      raw: input,
-      isKubectl: false,
-      isShellCommand: false,
-      verb: "",
-      flags: {},
-      args: [],
-      redirectToFile,
-      redirectFile: redirectToFile,
-    };
+  if (expected.verb) {
+    if (!parsed.ok || parsed.verb !== expected.verb.toLowerCase()) return false;
   }
-
-  const firstToken = tokens[0].toLowerCase();
-  const shellCommands = ["cat", "ls", "vim", "vi", "rm", "touch", "echo", "pwd", "grep", "head", "tail", "clear", "help"];
-
-  let isKubectl = false;
-  let cmdTokens = tokens;
-
-  if (tokens[0] === "kubectl" || tokens[0] === "k") {
-    isKubectl = true;
-    cmdTokens = tokens.slice(1);
-  } else if (shellCommands.includes(firstToken)) {
-    const verb = firstToken === "vi" ? "vim" : firstToken;
-    const positionalArgs = tokens.slice(1);
-    const file = positionalArgs[0];
-    return {
-      raw: input,
-      isKubectl: false,
-      isShellCommand: true,
-      shellCmd: firstToken,
-      verb,
-      file,
-      name: file,
-      flags: {},
-      args: positionalArgs,
-      redirectToFile,
-      redirectFile: redirectToFile,
-    };
+  if (expected.subcommand && parsed.subcommand !== expected.subcommand.toLowerCase()) return false;
+  if (expected.resource) {
+    const wanted = normaliseResource(expected.resource) ?? expected.resource;
+    if (parsed.resource !== wanted) return false;
   }
+  if (expected.name && !parsed.names.includes(expected.name)) return false;
 
-  if (cmdTokens.length === 0) {
-    return {
-      raw: input,
-      isKubectl: true,
-      isShellCommand: false,
-      verb: "",
-      flags: {},
-      args: [],
-      redirectToFile,
-      redirectFile: redirectToFile,
-    };
-  }
-
-  const verb = cmdTokens[0]?.toLowerCase() || "";
-  const flags: Record<string, string | boolean> = {};
-  const positionalArgs: string[] = [];
-
-  for (let i = 1; i < cmdTokens.length; i++) {
-    const token = cmdTokens[i];
-    if (token.startsWith("--")) {
-      const parts = token.slice(2).split("=");
-      const key = parts[0];
-      if (parts.length > 1) {
-        flags[key] = parts.slice(1).join("=");
-      } else if (i + 1 < cmdTokens.length && !cmdTokens[i + 1].startsWith("-") && cmdTokens[i + 1] !== ">" && cmdTokens[i + 1] !== ">>") {
-        flags[key] = cmdTokens[i + 1];
-        i++;
-      } else {
-        flags[key] = true;
-      }
-    } else if (token.startsWith("-")) {
-      const parts = token.slice(1).split("=");
-      const key = parts[0];
-      if (parts.length > 1) {
-        flags[key] = parts.slice(1).join("=");
-      } else if (i + 1 < cmdTokens.length && !cmdTokens[i + 1].startsWith("-") && cmdTokens[i + 1] !== ">" && cmdTokens[i + 1] !== ">>") {
-        flags[key] = cmdTokens[i + 1];
-        i++;
-      } else {
-        flags[key] = true;
-      }
-    } else {
-      positionalArgs.push(token);
+  if (expected.flags) {
+    for (const [key, value] of Object.entries(expected.flags)) {
+      const actual = parsed.flags[key];
+      if (actual === undefined) return false;
+      if (value === true) continue;
+      if (String(actual) !== String(value)) return false;
     }
   }
-
-  // Normalize common flags
-  if (flags.f && !flags.filename) flags.filename = flags.f;
-  if (flags.filename && !flags.f) flags.f = flags.filename;
-  if (flags.o && !flags.output) flags.output = flags.o;
-  if (flags.output && !flags.o) flags.o = flags.output;
-  if (flags.n && !flags.namespace) flags.namespace = flags.n;
-  if (flags.namespace && !flags.n) flags.n = flags.namespace;
-  if (flags.A || flags["all-namespaces"]) {
-    flags.allNamespaces = true;
-    flags.A = true;
-  }
-
-  const outputFormat = (flags.output || flags.o) as string | undefined;
-  let file: string | undefined = (flags.filename || flags.f || flags.file) as string | undefined;
-  let resource: string | undefined;
-  let name: string | undefined;
-  let subVerb: string | undefined;
-
-  if (verb === "run") {
-    resource = "pod";
-    name = positionalArgs[0];
-  } else if (verb === "apply") {
-    if (!file && positionalArgs.length > 0) {
-      file = positionalArgs[0];
-    }
-  } else if (verb === "create") {
-    if (!file && positionalArgs.length > 0 && (positionalArgs[0].endsWith(".yaml") || positionalArgs[0].endsWith(".yml") || positionalArgs[0].endsWith(".json"))) {
-      file = positionalArgs[0];
-    } else if (positionalArgs.length > 0) {
-      if (positionalArgs[0].includes("/")) {
-        const [res, n] = positionalArgs[0].split("/");
-        resource = normalizeResource(res);
-        name = n;
-      } else {
-        resource = normalizeResource(positionalArgs[0]);
-        name = positionalArgs[1];
-      }
-    }
-  } else if (verb === "delete") {
-    if (!file && positionalArgs.length > 0 && (positionalArgs[0].endsWith(".yaml") || positionalArgs[0].endsWith(".yml") || positionalArgs[0].endsWith(".json"))) {
-      file = positionalArgs[0];
-    } else if (positionalArgs.length > 0) {
-      if (positionalArgs[0].includes("/")) {
-        const [res, n] = positionalArgs[0].split("/");
-        resource = normalizeResource(res);
-        name = n;
-      } else {
-        resource = normalizeResource(positionalArgs[0]);
-        name = positionalArgs[1];
-      }
-    }
-  } else if (verb === "get" || verb === "describe") {
-    if (positionalArgs.length > 0) {
-      if (positionalArgs[0].includes("/")) {
-        const [res, n] = positionalArgs[0].split("/");
-        resource = normalizeResource(res);
-        name = n;
-      } else {
-        resource = normalizeResource(positionalArgs[0]);
-        name = positionalArgs[1];
-      }
-    }
-  } else if (verb === "scale") {
-    if (positionalArgs.length > 0) {
-      if (positionalArgs[0].includes("/")) {
-        const [res, n] = positionalArgs[0].split("/");
-        resource = normalizeResource(res);
-        name = n;
-      } else {
-        resource = normalizeResource(positionalArgs[0]);
-        name = positionalArgs[1];
-      }
-    }
-  } else if (verb === "set") {
-    if (positionalArgs[0] === "image") {
-      resource = "deployment";
-      if (positionalArgs[1]?.includes("/")) {
-        const [, n] = positionalArgs[1].split("/");
-        name = n;
-      } else {
-        name = positionalArgs[2];
-      }
-    }
-  } else if (verb === "rollout") {
-    subVerb = positionalArgs[0];
-    if (["status", "history", "undo", "restart"].includes(subVerb)) {
-      const target = positionalArgs[1];
-      if (target?.includes("/")) {
-        const [res, n] = target.split("/");
-        resource = normalizeResource(res);
-        name = n;
-      } else {
-        resource = normalizeResource(target || "deployment");
-        name = positionalArgs[2];
-      }
-    }
-  } else if (verb === "logs") {
-    if (positionalArgs.length > 0) {
-      if (positionalArgs[0].includes("/")) {
-        const [res, n] = positionalArgs[0].split("/");
-        resource = normalizeResource(res);
-        name = n;
-      } else {
-        resource = "pod";
-        name = positionalArgs[0];
-      }
-    }
-  } else if (verb === "events") {
-    resource = "events";
-  }
-
-  return {
-    raw: input,
-    isKubectl,
-    isShellCommand: false,
-    verb,
-    resource,
-    name,
-    flags,
-    args: positionalArgs,
-    file,
-    redirectToFile,
-    redirectFile: redirectToFile,
-    outputFormat,
-    subVerb,
-  };
+  return true;
 }

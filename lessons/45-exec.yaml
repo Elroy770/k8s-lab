@@ -1,0 +1,96 @@
+id: exec
+chapter: Observability
+title: Stepping Inside the Container
+concept: kubectl exec
+
+intro: |
+  `kubectl exec` runs a command inside a running container. It is the most
+  direct debugging tool you have, and the one to reach for last.
+
+initialState:
+  configMaps:
+    - name: app-config
+      data:
+        APP_MODE: production
+        FEATURE_FLAGS: checkout,search
+  deployments:
+    - name: web
+      replicas: 1
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+        envFrom:
+          - kind: configMap
+            name: app-config
+        volumes:
+          - name: config
+            kind: configMap
+            source: app-config
+        mounts:
+          - name: config
+            mountPath: /etc/config
+  services:
+    - name: web
+      selector:
+        app: web
+      port: 80
+
+steps:
+  - type: challenge
+    prompt: Ask the container who it thinks it is.
+    hint: "kubectl exec <paste-a-pod-name> -- hostname"
+    expected:
+      verb: exec
+      contains: hostname
+    reveal: The hostname is the Pod name. Applications can rely on that.
+
+  - type: challenge
+    prompt: Check the environment the container really received.
+    hint: "kubectl exec <paste-a-pod-name> -- env"
+    expected:
+      verb: exec
+      contains: env
+    reveal: The ConfigMap keys are there - proof the injection worked.
+
+  - type: challenge
+    prompt: List the mounted configuration directory.
+    hint: "kubectl exec <paste-a-pod-name> -- ls /etc/config"
+    expected:
+      verb: exec
+      contains: /etc/config
+
+  - type: challenge
+    prompt: Verify DNS resolution from inside the Pod.
+    hint: "kubectl exec <paste-a-pod-name> -- nslookup web"
+    expected:
+      verb: exec
+      contains: nslookup
+    reveal: The Service name resolves to its ClusterIP, from inside the cluster.
+
+  - type: challenge
+    prompt: Call the Service from inside the container itself.
+    hint: "kubectl exec <paste-a-pod-name> -- curl http://web"
+    expected:
+      verb: exec
+      contains: curl
+    reveal: This is the test that separates "app broken" from "network broken".
+
+  - type: explanation
+    text: |
+      What exec is genuinely good for:
+
+      - confirming what configuration actually arrived (env, mounted files)
+      - testing DNS and connectivity *from the Pod's own network namespace*
+      - looking at files a volume should contain
+
+      What it is bad for: fixing things. Any change you make by hand is gone at
+      the next restart and invisible to everyone else. If exec fixed it, the
+      manifest is what needs changing.
+
+      Note that many hardened images have no shell at all - which is why
+      `kubectl debug` and ephemeral containers exist.
+
+  - type: transition
+    text: |
+      You now have every building block. The last chapter is assembly.

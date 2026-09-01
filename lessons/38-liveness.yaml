@@ -1,0 +1,119 @@
+id: liveness
+chapter: Health
+title: Restarting What Is Stuck
+concept: Liveness probes
+
+intro: |
+  A process can be running and still be useless - deadlocked, out of file
+  handles, wedged on a lock.
+
+  Kubernetes cannot tell the difference unless you tell it how to ask.
+
+files:
+  broken.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: api
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: api
+      template:
+        metadata:
+          labels:
+            app: api
+        spec:
+          containers:
+            - name: app
+              image: nginx:1.22
+              livenessProbe:
+                httpGet:
+                  path: /health
+                  port: 80
+                failureThreshold: 3
+  fixed.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: api
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: api
+      template:
+        metadata:
+          labels:
+            app: api
+        spec:
+          containers:
+            - name: app
+              image: nginx:1.22
+              livenessProbe:
+                httpGet:
+                  path: /healthz
+                  port: 80
+                failureThreshold: 3
+
+steps:
+  - type: challenge
+    prompt: Deploy the API with a liveness probe on /health.
+    hint: kubectl apply -f broken.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: broken.yaml
+
+  - type: challenge
+    prompt: Watch the Pod for a few seconds, then list it.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: The RESTARTS column is climbing, and the Pod ends in CrashLoopBackOff.
+
+  - type: challenge
+    prompt: Find out what the kubelet is complaining about.
+    hint: "kubectl describe pod <paste-a-pod-name>"
+    expected:
+      verb: describe
+      resource: pods
+    reveal: "Liveness probe failed: HTTP 404 on /health."
+
+  - type: challenge
+    prompt: The app serves /healthz, not /health. Apply the corrected manifest.
+    hint: kubectl apply -f fixed.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: fixed.yaml
+
+  - type: challenge
+    prompt: Confirm the Pod is stable now.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: Running, 1/1, no restarts.
+
+  - type: explanation
+    text: |
+      A failing liveness probe is not a warning - it is an execution order. The
+      kubelet kills the container and starts it again.
+
+      Which is exactly why a wrong probe is dangerous: a healthy application
+      with a mistyped path will be restarted forever, and the logs will look
+      completely normal right up to the kill.
+
+      Two rules worth keeping:
+
+      - point liveness at something cheap that only fails when the process is
+        genuinely unrecoverable
+      - never make a liveness probe depend on a database or another service, or
+        one slow dependency will restart your whole fleet
+
+  - type: transition
+    text: |
+      Liveness decides whether to kill. Readiness decides whether to send traffic.

@@ -1,0 +1,73 @@
+id: mental-model
+chapter: Workloads
+title: The Whole Machine
+concept: Recap — controllers all the way down
+
+intro: |
+  One final experiment, then the mental model you should walk away with.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 3
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+
+steps:
+  - type: challenge
+    prompt: Show every workload object at once.
+    hint: kubectl get all
+    expected:
+      verb: get
+      resource: all
+
+  - type: challenge
+    prompt: Delete one Pod and predict what happens before you press enter.
+    hint: "kubectl delete pod <paste-a-pod-name>"
+    expected:
+      verb: delete
+      resource: pods
+    reveal: The ReplicaSet replaced it. Level 3 healed itself.
+
+  - type: challenge
+    prompt: Now delete the whole ReplicaSet. Predict again.
+    hint: "kubectl delete rs <paste-the-rs-name>"
+    expected:
+      verb: delete
+      resource: replicasets
+    reveal: The Deployment built a brand new ReplicaSet. Level 2 healed itself.
+
+  - type: challenge
+    prompt: Confirm the Deployment is back to full strength.
+    hint: kubectl get deploy
+    expected:
+      verb: get
+      resource: deployments
+
+  - type: explanation
+    text: |
+      Everything you saw was the same loop repeated at different levels:
+
+          you            declare desired state
+          Deployment     keeps the right ReplicaSet at the right size
+          ReplicaSet     keeps the right number of Pods alive
+          kubelet        keeps the right containers running on a node
+
+      Nothing in the chain remembers what you deleted. Each layer only ever
+      compares "what is" against "what should be" and closes the gap.
+
+  - type: observation
+    text: |
+      The practical rules that follow from that:
+
+      - never run bare Pods in production; nothing will restore them
+      - never treat a Pod name as stable; it is generated and disposable
+      - change the Deployment, not the ReplicaSet, not the Pod
+      - a stuck rollout is safe; a rollback is just another rollout forward
+
+  - type: transition
+    text: |
+      That is the core of Kubernetes workload management. Everything else —
+      Services, ConfigMaps, StatefulSets — hangs off this same idea.

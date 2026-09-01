@@ -1,0 +1,53 @@
+id: inspect-pod
+chapter: Workloads
+title: Where Does a Pod Actually Live?
+concept: Pod placement, IPs, describe
+
+intro: |
+  Your `web` Pod is running.
+
+  A Pod is not an abstract idea: it sits on one specific node and owns one
+  specific IP address. If you cannot answer "where is it and what is wrong with
+  it", you cannot debug Kubernetes.
+
+initialState:
+  pods:
+    - name: web
+      template:
+        image: nginx:1.21
+        labels:
+          run: web
+
+steps:
+  - type: challenge
+    prompt: List the Pods with the extra columns that show node and IP.
+    hint: kubectl get pods -o wide
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        output: wide
+    reveal: Every Pod gets its own cluster IP and is bound to exactly one node.
+
+  - type: challenge
+    prompt: Get the full detail of the `web` Pod.
+    hint: kubectl describe pod web
+    expected:
+      verb: describe
+      resource: pods
+      name: web
+    reveal: "Controlled By: <none> — remember that line."
+
+  - type: explanation
+    text: |
+      Look at what `describe` told you:
+
+      - it runs on a node you never picked
+      - it has an IP you never chose
+      - and it is controlled by nothing
+
+      That last line is the interesting one. No controller is watching this Pod.
+
+  - type: transition
+    text: |
+      So what happens if this Pod goes away? Let's find out the honest way.

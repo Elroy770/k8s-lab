@@ -1,0 +1,68 @@
+id: self-healing
+chapter: Workloads
+title: Kill a Pod, Watch It Come Back
+concept: Reconciliation loop
+
+intro: |
+  Three Pods are running under the `web` ReplicaSet.
+
+  Delete one. This time something *is* watching.
+
+initialState:
+  replicaSets:
+    - name: web
+      replicas: 3
+      selector:
+        app: web
+      template:
+        image: nginx:1.21
+        labels:
+          app: web
+
+steps:
+  - type: challenge
+    prompt: List the Pods and pick a victim (copy one of the generated names).
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+
+  - type: challenge
+    prompt: Delete one of those Pods by name.
+    hint: "kubectl delete pod <paste-a-name-here>"
+    expected:
+      verb: delete
+      resource: pods
+    reveal: Watch the cluster panel — a replacement is already being scheduled.
+
+  - type: challenge
+    prompt: List the Pods again and compare the names.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: Still three. But one of them is new, with a fresh name and age.
+
+  - type: observation
+    text: |
+      Nobody recreated "your" Pod. The controller noticed 2 ≠ 3 and created a
+      Pod to close the gap. The replacement is a different Pod entirely.
+
+  - type: explanation
+    text: |
+      This is the reconciliation loop, and it never ends:
+
+          desired = 3
+          observed = 2
+          → create one Pod
+          observed = 3
+          → do nothing
+
+      It does not remember what you deleted. It only compares the current world
+      against the declared one, over and over.
+
+      That is also why deleting a managed Pod is a useless way to "stop" an app.
+
+  - type: transition
+    text: |
+      If the controller obeys a number, what happens when you change the number?

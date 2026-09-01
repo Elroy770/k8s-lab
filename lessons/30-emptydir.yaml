@@ -1,0 +1,90 @@
+id: emptydir
+chapter: Storage
+title: A Scratch Disk for the Pod
+concept: emptyDir volumes
+
+intro: |
+  An `emptyDir` is a directory created when the Pod is scheduled and deleted
+  when the Pod goes away.
+
+  It is not persistence. It is shared scratch space with a clear lifetime.
+
+files:
+  cache.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: cache
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: cache
+      template:
+        metadata:
+          labels:
+            app: cache
+        spec:
+          containers:
+            - name: app
+              image: nginx:1.22
+              volumeMounts:
+                - name: scratch
+                  mountPath: /cache
+          volumes:
+            - name: scratch
+              emptyDir: {}
+
+steps:
+  - type: challenge
+    prompt: Deploy an app with an emptyDir mounted at /cache.
+    hint: kubectl apply -f cache.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: cache.yaml
+
+  - type: challenge
+    prompt: Write something into the volume.
+    hint: "kubectl exec <paste-a-pod-name> -- sh -c \"echo rendered-page > /cache/page.html\""
+    expected:
+      verb: exec
+      contains: /cache
+
+  - type: challenge
+    prompt: List the volume contents.
+    hint: "kubectl exec <paste-a-pod-name> -- ls /cache"
+    expected:
+      verb: exec
+      contains: ls
+
+  - type: challenge
+    prompt: Delete the Pod and let the ReplicaSet replace it.
+    hint: "kubectl delete pod <paste-a-pod-name>"
+    expected:
+      verb: delete
+      resource: pods
+
+  - type: challenge
+    prompt: Check the new Pod's cache directory.
+    hint: "kubectl exec <paste-the-new-pod-name> -- ls /cache"
+    expected:
+      verb: exec
+      contains: /cache
+    reveal: Empty. The volume was born and died with the previous Pod.
+
+  - type: explanation
+    text: |
+      What emptyDir is genuinely good for:
+
+      - scratch space for a single Pod (caches, temp files, unpacked archives)
+      - handing data between containers in the *same* Pod, such as a sidecar
+        writing files that the main container serves
+
+      What it is not good for: anything you would be upset to lose. Its lifetime
+      is exactly the Pod's lifetime - it survives a container crash, but never
+      rescheduling.
+
+  - type: transition
+    text: |
+      For data that must outlive the Pod, the cluster needs a real volume.

@@ -1,0 +1,94 @@
+id: service-selectors
+chapter: Services
+title: The Service That Routes Nowhere
+concept: Selector and label mismatch
+
+intro: |
+  Someone deployed a Service for the `web` app. Users are getting errors and
+  nobody has touched the Deployment.
+
+  Find out why.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 3
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+  services:
+    - name: web-svc
+      selector:
+        app: frontend
+      port: 80
+
+steps:
+  - type: challenge
+    prompt: Reproduce the failure - send a request to the Service.
+    hint: curl http://web-svc
+    allowError: true
+    expected:
+      verb: curl
+      contains: web-svc
+    reveal: 503. The Service exists but has nothing behind it.
+
+  - type: challenge
+    prompt: The Pods look healthy, so inspect the Service instead.
+    hint: kubectl describe svc web-svc
+    expected:
+      verb: describe
+      resource: services
+      name: web-svc
+    reveal: "Endpoints: <none>, and the selector says app=frontend."
+
+  - type: challenge
+    prompt: Now check what labels the Pods actually carry.
+    hint: kubectl get pods --show-labels
+    expected:
+      verb: get
+      resource: pods
+      flags:
+        show-labels: true
+    reveal: "app=web. The Service is looking for a label nobody wears."
+
+  - type: challenge
+    prompt: A Service selector is immutable here - delete the broken Service.
+    hint: kubectl delete svc web-svc
+    expected:
+      verb: delete
+      resource: services
+      name: web-svc
+
+  - type: challenge
+    prompt: Recreate it from the Deployment, so the selector is derived instead of typed.
+    hint: kubectl expose deployment web --port=80 --name=web-svc
+    expected:
+      verb: expose
+      resource: deployments
+      name: web
+
+  - type: challenge
+    prompt: Verify the fix.
+    hint: curl http://web-svc
+    expected:
+      verb: curl
+      contains: web-svc
+    reveal: 200, served by a real Pod.
+
+  - type: explanation
+    text: |
+      A Service never knows about Deployments, ReplicaSets or Pod names. It only
+      knows labels.
+
+      Which means there are exactly two ways it can route nowhere:
+
+      - the selector does not match any Pod's labels
+      - the matching Pods exist but are not Ready
+
+      `kubectl describe svc` and `kubectl get endpoints` answer both in seconds,
+      and they should be your first two commands whenever traffic disappears.
+
+  - type: transition
+    text: |
+      So far everything has been internal. Time to let the outside in.

@@ -1,0 +1,56 @@
+id: pod-is-mortal
+chapter: Workloads
+title: Your Pod Just Died
+concept: Pods are mortal
+
+intro: |
+  Nodes get drained. Processes crash. Someone runs the wrong command.
+
+  Delete your Pod and watch what Kubernetes does about it.
+
+initialState:
+  pods:
+    - name: web
+      template:
+        image: nginx:1.21
+        labels:
+          run: web
+
+steps:
+  - type: challenge
+    prompt: Delete the `web` Pod.
+    hint: kubectl delete pod web
+    expected:
+      verb: delete
+      resource: pods
+      name: web
+    reveal: Terminating… and then gone.
+
+  - type: challenge
+    prompt: List the Pods again. Is anything coming back?
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: Nothing. The cluster is empty and perfectly happy about it.
+
+  - type: observation
+    text: |
+      No replacement. No retry. No alert.
+
+      Kubernetes did exactly what you asked and then stopped caring.
+
+  - type: explanation
+    text: |
+      A bare Pod is a one-off request, not a promise.
+
+      Kubernetes is a *desired state* system, but the only desired state you
+      declared was "create this Pod once". Once it is deleted, nothing in the
+      cluster still believes it should exist.
+
+      Self-healing is not a property of Pods. It is a property of controllers.
+
+  - type: transition
+    text: |
+      You need something whose job is to keep saying "there should be N of
+      these". That object is a ReplicaSet.

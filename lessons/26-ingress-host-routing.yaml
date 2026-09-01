@@ -1,0 +1,117 @@
+id: ingress-host-routing
+chapter: Ingress
+title: Two Sites, One Address
+concept: Host-based routing
+
+intro: |
+  The shop and the blog are separate Deployments with separate Services. They
+  should share a single public entry point.
+
+initialState:
+  deployments:
+    - name: shop
+      replicas: 2
+      template:
+        image: nginx:1.22
+        labels:
+          app: shop
+    - name: blog
+      replicas: 1
+      template:
+        image: httpd:2.4
+        labels:
+          app: blog
+  services:
+    - name: shop
+      selector:
+        app: shop
+      port: 80
+    - name: blog
+      selector:
+        app: blog
+      port: 80
+
+files:
+  hosts.yaml: |
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: sites
+    spec:
+      ingressClassName: nginx
+      rules:
+        - host: shop.local
+          http:
+            paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: shop
+                    port:
+                      number: 80
+        - host: blog.local
+          http:
+            paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: blog
+                    port:
+                      number: 80
+
+steps:
+  - type: challenge
+    prompt: Apply the Ingress that serves both hostnames.
+    hint: kubectl apply -f hosts.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: hosts.yaml
+
+  - type: challenge
+    prompt: Check the hosts it now answers for.
+    hint: kubectl get ingress
+    expected:
+      verb: get
+      resource: ingresses
+    reveal: Two hosts, one address.
+
+  - type: challenge
+    prompt: Request the shop.
+    hint: curl http://shop.local
+    expected:
+      verb: curl
+      contains: shop.local
+    reveal: Served by an nginx Pod from the shop Deployment.
+
+  - type: challenge
+    prompt: Request the blog on the same address.
+    hint: curl http://blog.local
+    expected:
+      verb: curl
+      contains: blog.local
+    reveal: Served by an httpd Pod. Same entry point, different backend.
+
+  - type: challenge
+    prompt: Ask a hostname nobody configured.
+    hint: curl http://admin.local
+    allowError: true
+    expected:
+      verb: curl
+      contains: admin.local
+    reveal: No rule matches, so nothing answers.
+
+  - type: explanation
+    text: |
+      Host routing works because HTTP requests carry the hostname in the `Host`
+      header. The ingress controller reads it and picks the rule.
+
+      That is also why an Ingress can only route HTTP and HTTPS - raw TCP has no
+      equivalent header, so databases and message brokers still need Services of
+      type LoadBalancer.
+
+  - type: transition
+    text: |
+      Same idea, one level deeper: routing on the path.

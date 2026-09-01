@@ -1,0 +1,136 @@
+id: capstone-stateful-app
+chapter: Capstones
+title: Ship a Stateful Application
+concept: StatefulSet + headless Service + storage
+
+intro: |
+  Same exercise, different guarantees: stable identity, stable storage, ordered
+  start-up.
+
+  Build a database tier and prove the data survives losing a Pod.
+
+initialState:
+  storageClasses:
+    - name: standard
+      provisioner: lab.local/dynamic
+      isDefault: true
+
+files:
+  db.yaml: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: pg
+    spec:
+      clusterIP: None
+      selector:
+        app: pg
+      ports:
+        - port: 5432
+    ---
+    apiVersion: apps/v1
+    kind: StatefulSet
+    metadata:
+      name: pg
+    spec:
+      serviceName: pg
+      replicas: 2
+      selector:
+        matchLabels:
+          app: pg
+      template:
+        metadata:
+          labels:
+            app: pg
+        spec:
+          containers:
+            - name: app
+              image: postgres:16
+              volumeMounts:
+                - name: data
+                  mountPath: /var/lib/data
+      volumeClaimTemplates:
+        - metadata:
+            name: data
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            storageClassName: standard
+            resources:
+              requests:
+                storage: 5Gi
+
+steps:
+  - type: challenge
+    prompt: Create the headless Service and the StatefulSet together.
+    hint: kubectl apply -f db.yaml
+    expected:
+      verb: apply
+      flags:
+        filename: db.yaml
+
+  - type: challenge
+    prompt: Watch the Pods appear in order.
+    hint: kubectl get pods
+    expected:
+      verb: get
+      resource: pods
+    reveal: "pg-0 first, then pg-1 - and only after pg-0 was Ready."
+
+  - type: challenge
+    prompt: Confirm each Pod got its own volume, provisioned on demand.
+    hint: kubectl get pvc
+    expected:
+      verb: get
+      resource: persistentvolumeclaims
+    reveal: "data-pg-0 and data-pg-1, both Bound to dynamically created volumes."
+
+  - type: challenge
+    prompt: Write data into the primary.
+    hint: "kubectl exec pg-0 -- sh -c \"echo orders-table > /var/lib/data/db.sql\""
+    expected:
+      verb: exec
+      contains: /var/lib/data
+
+  - type: challenge
+    prompt: Simulate losing the Pod.
+    hint: kubectl delete pod pg-0
+    expected:
+      verb: delete
+      resource: pods
+      name: pg-0
+
+  - type: challenge
+    prompt: Verify the data came back with the same identity.
+    hint: "kubectl exec pg-0 -- cat /var/lib/data/db.sql"
+    expected:
+      verb: exec
+      contains: db.sql
+    reveal: Same name, same volume, same data.
+
+  - type: challenge
+    prompt: Scale the tier up and check ordering.
+    hint: kubectl scale statefulset pg --replicas=3
+    expected:
+      verb: scale
+      resource: statefulsets
+      name: pg
+      flags:
+        replicas: 3
+    reveal: "pg-2 is created last, with its own new claim."
+
+  - type: explanation
+    text: |
+      Three things made this work, and all three are required together:
+
+      - a headless Service, giving `pg-0.pg` a resolvable name
+      - `volumeClaimTemplates`, giving each ordinal a private volume
+      - ordered reconciliation, so a replica never starts before its predecessor
+
+      A Deployment with a PersistentVolumeClaim looks similar and is not: all
+      replicas would share one claim, which an RWO volume cannot do across
+      nodes.
+
+  - type: transition
+    text: |
+      One more shape: infrastructure that must be everywhere.

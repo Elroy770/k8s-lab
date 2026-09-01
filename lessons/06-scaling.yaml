@@ -1,0 +1,66 @@
+id: scaling
+chapter: Workloads
+title: Changing the Number
+concept: Scaling, and the limits of a ReplicaSet
+
+intro: |
+  Scaling in Kubernetes is not "start more servers". It is "edit one integer and
+  let the controller catch up".
+
+initialState:
+  replicaSets:
+    - name: web
+      replicas: 3
+      selector:
+        app: web
+      template:
+        image: nginx:1.21
+        labels:
+          app: web
+
+steps:
+  - type: challenge
+    prompt: Scale the `web` ReplicaSet up to 5 replicas.
+    hint: kubectl scale rs web --replicas=5
+    expected:
+      verb: scale
+      resource: replicasets
+      name: web
+      flags:
+        replicas: 5
+    reveal: Two new Pods are being scheduled onto the least loaded nodes.
+
+  - type: challenge
+    prompt: Confirm the ReplicaSet reached its new desired state.
+    hint: kubectl get rs
+    expected:
+      verb: get
+      resource: replicasets
+
+  - type: challenge
+    prompt: Now scale it back down to 2.
+    hint: kubectl scale rs web --replicas=2
+    expected:
+      verb: scale
+      resource: replicasets
+      name: web
+      flags:
+        replicas: 2
+    reveal: Three Pods move to Terminating. Scaling down is the same loop, mirrored.
+
+  - type: explanation
+    text: |
+      Scaling up and scaling down are not two features. They are one comparison:
+      `observed - desired`, acted on until it is zero.
+
+  - type: observation
+    text: |
+      Now think about a release. Your Pods run `nginx:1.21` and you want
+      `nginx:1.22`.
+
+      A ReplicaSet has no answer for that. Editing its image does not touch the
+      Pods that already exist, and deleting all of them means downtime.
+
+  - type: transition
+    text: |
+      You need an object that manages ReplicaSets *for* you. That is a Deployment.

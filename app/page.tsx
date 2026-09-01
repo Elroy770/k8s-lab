@@ -8,8 +8,8 @@ import { loadLessons } from "@/engine/lesson-loader";
  */
 export const dynamic = "force-dynamic";
 
-export default async function Page() {
-  const lessons = await loadLessons();
+export default function Page() {
+  const lessons = loadLessons();
 
   if (lessons.length === 0) {
     return (

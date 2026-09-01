@@ -1,1528 +1,1394 @@
-import YAML from "yaml";
 import {
-  ClusterState,
-  ClusterNode,
-  Pod,
-  ReplicaSet,
-  Deployment,
-  LessonStep,
-  DaemonSet,
-  StatefulSet,
-  Job,
-  CronJob,
-  Service,
-  ServicePort,
-  Namespace,
-  ConfigMapResource,
-  SecretResource,
-  ActionImpact,
-  DEFAULT_NODES,
-  DEFAULT_FILES,
+  addNode,
+  createConfigMap,
+  createDeployment,
+  createPersistentVolumeClaim,
+  createPod,
+  createSecret,
+  createService,
+  endpointsOf,
+  formatAge,
+  isReady,
+  listPath,
+  matchesSelector,
+  nodeFits,
+  podEnv,
+  podsOf,
+  readPath,
+  recordEvent,
+  replicaSetsOf,
+  templateHash,
+  writePath,
 } from "./cluster-state";
-import { parseCommand, ParsedCommand, normalizeResource } from "./kubectl-parser";
+import { applyDocument } from "./manifest";
+import type {
+  ClusterState,
+  CommandResult,
+  Deployment,
+  Labels,
+  ParsedCommand,
+  Pod,
+  Service,
+} from "./types";
 
-export { DEFAULT_NODES, DEFAULT_FILES };
-export const DEFAULT_VIRTUAL_FILES = DEFAULT_FILES;
+/**
+ * Executes the slice of kubectl (plus curl and cat) that the lessons need.
+ * Every command mutates `state` in place and returns terminal output.
+ */
 
-export interface ExecutionResult {
-  output: string;
-  newState: ClusterState;
-  isCorrect: boolean;
-  message?: string;
-  componentFlow?: string[];
-  actionDescription?: string;
-  actionImpact?: ActionImpact;
-  openVim?: string;
+export interface ManifestFile {
+  raw: string;
+  doc: Record<string, unknown>;
 }
 
-function formatServicePorts(ports: string | ServicePort[] | undefined): string {
-  if (!ports) return "<none>";
-  if (typeof ports === "string") return ports;
-  if (Array.isArray(ports)) {
-    return ports
-      .map((p) => `${p.port}${p.nodePort ? `:${p.nodePort}` : ""}/${p.protocol || "TCP"}`)
-      .join(",");
+export interface ExecContext {
+  files: Record<string, ManifestFile>;
+}
+
+const EMPTY_CONTEXT: ExecContext = { files: {} };
+
+/* ------------------------------------------------------------------ */
+/* Output helpers                                                      */
+/* ------------------------------------------------------------------ */
+
+function table(rows: string[][]): string[] {
+  if (rows.length === 0) return [];
+  const columns = Math.max(...rows.map((row) => row.length));
+  const widths = Array.from({ length: columns }, (_, column) =>
+    Math.max(...rows.map((row) => (row[column] ?? "").length)),
+  );
+  return rows.map((row) =>
+    row
+      .map((cell, column) =>
+        column === columns - 1 ? cell : (cell ?? "").padEnd(widths[column] + 3),
+      )
+      .join("")
+      .trimEnd(),
+  );
+}
+
+function ok(output: string[]): CommandResult {
+  return { output, isError: false };
+}
+
+function err(message: string): CommandResult {
+  return { output: [`error: ${message}`], isError: true };
+}
+
+const NOTHING = "No resources found in default namespace.";
+
+function labelString(labels: Labels): string {
+  const entries = Object.entries(labels);
+  return entries.length ? entries.map(([key, value]) => `${key}=${value}`).join(",") : "<none>";
+}
+
+function parseLabels(value: unknown): Labels | undefined {
+  if (typeof value !== "string") return undefined;
+  const labels: Labels = {};
+  for (const pair of value.split(",")) {
+    const [key, val] = pair.split("=");
+    if (key && val !== undefined) labels[key.trim()] = val.trim();
   }
-  return "<none>";
+  return Object.keys(labels).length ? labels : undefined;
 }
 
-function getServicePortInfo(ports: string | ServicePort[] | undefined): { portNum: string; targetPort: string } {
-  if (!ports) return { portNum: "80", targetPort: "80" };
-  if (Array.isArray(ports)) {
-    const first = ports[0];
-    if (first) {
-      return {
-        portNum: String(first.port),
-        targetPort: String(first.nodePort || first.targetPort || first.port),
-      };
+function podStatus(pod: Pod): string {
+  if (pod.phase === "Pending" && pod.reason?.startsWith("CreateContainerConfigError")) {
+    return "CreateContainerConfigError";
+  }
+  return pod.phase;
+}
+
+/* ------------------------------------------------------------------ */
+/* get                                                                 */
+/* ------------------------------------------------------------------ */
+
+function getPods(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const selector = parseLabels(parsed.flags.selector);
+  let pods = state.pods;
+  if (selector) pods = pods.filter((pod) => matchesSelector(pod.labels, selector));
+  if (parsed.names.length) pods = pods.filter((pod) => parsed.names.includes(pod.name));
+  if (pods.length === 0) return ok([NOTHING]);
+
+  const wide = parsed.flags.output === "wide";
+  const showLabels = parsed.flags["show-labels"] === true;
+  const header = ["NAME", "READY", "STATUS", "RESTARTS", "AGE"];
+  if (wide) header.push("IP", "NODE", "IMAGE");
+  if (showLabels) header.push("LABELS");
+
+  const rows = [header];
+  for (const pod of pods) {
+    const row = [
+      pod.name,
+      pod.phase === "Completed" ? "0/1" : isReady(pod) ? "1/1" : "0/1",
+      podStatus(pod),
+      String(pod.restarts),
+      formatAge(pod.age),
+    ];
+    if (wide) row.push(pod.ip, pod.node ?? "<none>", pod.image);
+    if (showLabels) row.push(labelString(pod.labels));
+    rows.push(row);
+  }
+  return ok(table(rows));
+}
+
+function getReplicaSets(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  let sets = state.replicaSets;
+  if (parsed.names.length) sets = sets.filter((rs) => parsed.names.includes(rs.name));
+  if (sets.length === 0) return ok([NOTHING]);
+
+  const rows = [["NAME", "DESIRED", "CURRENT", "READY", "AGE"]];
+  for (const rs of sets) {
+    const pods = podsOf(state, rs);
+    rows.push([
+      rs.name,
+      String(rs.replicas),
+      String(pods.length),
+      String(pods.filter(isReady).length),
+      formatAge(rs.age),
+    ]);
+  }
+  return ok(table(rows));
+}
+
+function getDeployments(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  let deployments = state.deployments;
+  if (parsed.names.length) {
+    deployments = deployments.filter((item) => parsed.names.includes(item.name));
+  }
+  if (deployments.length === 0) return ok([NOTHING]);
+
+  const rows = [["NAME", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"]];
+  for (const deployment of deployments) {
+    const sets = replicaSetsOf(state, deployment);
+    const wanted = templateHash(deployment.template);
+    const current = sets.find((rs) => rs.podTemplateHash === wanted);
+    const ready = sets.flatMap((rs) => podsOf(state, rs)).filter(isReady).length;
+    rows.push([
+      deployment.name,
+      `${ready}/${deployment.replicas}`,
+      String(current ? podsOf(state, current).length : 0),
+      String(ready),
+      formatAge(deployment.age),
+    ]);
+  }
+  return ok(table(rows));
+}
+
+function getDaemonSets(state: ClusterState): CommandResult {
+  if (state.daemonSets.length === 0) return ok([NOTHING]);
+  const rows = [["NAME", "DESIRED", "CURRENT", "READY", "NODE SELECTOR", "AGE"]];
+  for (const daemonSet of state.daemonSets) {
+    const eligible = state.nodes.filter((node) => nodeFits(node, daemonSet.template)).length;
+    const pods = podsOf(state, daemonSet);
+    rows.push([
+      daemonSet.name,
+      String(eligible),
+      String(pods.length),
+      String(pods.filter(isReady).length),
+      labelString(daemonSet.template.nodeSelector ?? {}),
+      formatAge(daemonSet.age),
+    ]);
+  }
+  return ok(table(rows));
+}
+
+function getStatefulSets(state: ClusterState): CommandResult {
+  if (state.statefulSets.length === 0) return ok([NOTHING]);
+  const rows = [["NAME", "READY", "AGE"]];
+  for (const set of state.statefulSets) {
+    const ready = podsOf(state, set).filter(isReady).length;
+    rows.push([set.name, `${ready}/${set.replicas}`, formatAge(set.age)]);
+  }
+  return ok(table(rows));
+}
+
+function getJobs(state: ClusterState): CommandResult {
+  if (state.jobs.length === 0) return ok([NOTHING]);
+  const rows = [["NAME", "COMPLETIONS", "AGE"]];
+  for (const job of state.jobs) {
+    rows.push([job.name, `${job.succeeded}/${job.completions}`, formatAge(job.age)]);
+  }
+  return ok(table(rows));
+}
+
+function getCronJobs(state: ClusterState): CommandResult {
+  if (state.cronJobs.length === 0) return ok([NOTHING]);
+  const rows = [["NAME", "SCHEDULE", "SUSPEND", "LAST SCHEDULE", "AGE"]];
+  for (const cronJob of state.cronJobs) {
+    rows.push([
+      cronJob.name,
+      cronJob.schedule,
+      String(cronJob.suspend),
+      cronJob.lastScheduleAt === undefined
+        ? "<none>"
+        : formatAge(state.clock - cronJob.lastScheduleAt),
+      formatAge(cronJob.age),
+    ]);
+  }
+  return ok(table(rows));
+}
+
+function getServices(state: ClusterState): CommandResult {
+  if (state.services.length === 0) return ok([NOTHING]);
+  const rows = [["NAME", "TYPE", "CLUSTER-IP", "EXTERNAL-IP", "PORT(S)", "AGE"]];
+  for (const service of state.services) {
+    const ports = service.nodePort
+      ? `${service.port}:${service.nodePort}/TCP`
+      : `${service.port}/TCP`;
+    rows.push([
+      service.name,
+      service.type,
+      service.clusterIP,
+      service.externalIP ?? "<none>",
+      ports,
+      formatAge(service.age),
+    ]);
+  }
+  return ok(table(rows));
+}
+
+function getEndpoints(state: ClusterState): CommandResult {
+  if (state.services.length === 0) return ok([NOTHING]);
+  const rows = [["NAME", "ENDPOINTS", "AGE"]];
+  for (const service of state.services) {
+    const endpoints = endpointsOf(state, service);
+    rows.push([
+      service.name,
+      endpoints.length
+        ? endpoints.map((pod) => `${pod.ip}:${service.targetPort}`).join(",")
+        : "<none>",
+      formatAge(service.age),
+    ]);
+  }
+  return ok(table(rows));
+}
+
+function getIngresses(state: ClusterState): CommandResult {
+  if (state.ingresses.length === 0) return ok([NOTHING]);
+  const rows = [["NAME", "CLASS", "HOSTS", "ADDRESS", "PORTS", "AGE"]];
+  for (const ingress of state.ingresses) {
+    rows.push([
+      ingress.name,
+      ingress.className ?? "<none>",
+      [...new Set(ingress.rules.map((rule) => rule.host ?? "*"))].join(","),
+      ingress.address ?? "",
+      "80",
+      formatAge(ingress.age),
+    ]);
+  }
+  return ok(table(rows));
+}
+
+function getConfigMaps(state: ClusterState): CommandResult {
+  if (state.configMaps.length === 0) return ok([NOTHING]);
+  const rows = [["NAME", "DATA", "AGE"]];
+  for (const configMap of state.configMaps) {
+    rows.push([configMap.name, String(Object.keys(configMap.data).length), formatAge(configMap.age)]);
+  }
+  return ok(table(rows));
+}
+
+function getSecrets(state: ClusterState): CommandResult {
+  if (state.secrets.length === 0) return ok([NOTHING]);
+  const rows = [["NAME", "TYPE", "DATA", "AGE"]];
+  for (const secret of state.secrets) {
+    rows.push([
+      secret.name,
+      secret.type,
+      String(Object.keys(secret.data).length),
+      formatAge(secret.age),
+    ]);
+  }
+  return ok(table(rows));
+}
+
+function getStorageClasses(state: ClusterState): CommandResult {
+  if (state.storageClasses.length === 0) return ok([NOTHING]);
+  const rows = [["NAME", "PROVISIONER", "AGE"]];
+  for (const storageClass of state.storageClasses) {
+    rows.push([
+      storageClass.isDefault ? `${storageClass.name} (default)` : storageClass.name,
+      storageClass.provisioner,
+      formatAge(storageClass.age),
+    ]);
+  }
+  return ok(table(rows));
+}
+
+function getPersistentVolumes(state: ClusterState): CommandResult {
+  if (state.persistentVolumes.length === 0) return ok([NOTHING]);
+  const rows = [["NAME", "CAPACITY", "ACCESS MODES", "STATUS", "CLAIM", "STORAGECLASS", "AGE"]];
+  for (const volume of state.persistentVolumes) {
+    rows.push([
+      volume.name,
+      `${volume.capacityGi}Gi`,
+      volume.accessModes.map(shortAccessMode).join(","),
+      volume.status,
+      volume.claim ? `default/${volume.claim}` : "",
+      volume.storageClass,
+      formatAge(volume.age),
+    ]);
+  }
+  return ok(table(rows));
+}
+
+function shortAccessMode(mode: string): string {
+  return mode === "ReadWriteOnce" ? "RWO" : mode === "ReadWriteMany" ? "RWX" : "ROX";
+}
+
+function getPersistentVolumeClaims(state: ClusterState): CommandResult {
+  if (state.persistentVolumeClaims.length === 0) return ok([NOTHING]);
+  const rows = [["NAME", "STATUS", "VOLUME", "CAPACITY", "ACCESS MODES", "STORAGECLASS", "AGE"]];
+  for (const claim of state.persistentVolumeClaims) {
+    rows.push([
+      claim.name,
+      claim.status,
+      claim.volumeName ?? "",
+      claim.status === "Bound" ? `${claim.requestGi}Gi` : "",
+      claim.accessModes.map(shortAccessMode).join(","),
+      claim.storageClass ?? "<none>",
+      formatAge(claim.age),
+    ]);
+  }
+  return ok(table(rows));
+}
+
+function getNodes(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const wide = parsed.flags.output === "wide" || parsed.flags["show-labels"] === true;
+  const rows = [["NAME", "STATUS", "ROLES", "AGE", "VERSION", ...(wide ? ["LABELS"] : [])]];
+  for (const node of state.nodes) {
+    rows.push([
+      node.name,
+      node.ready ? "Ready" : "NotReady",
+      node.role === "control-plane" ? "control-plane" : "<none>",
+      formatAge(state.clock + 240),
+      "v1.30.2",
+      ...(wide ? [labelString(node.labels)] : []),
+    ]);
+  }
+  return ok(table(rows));
+}
+
+function getEvents(state: ClusterState): CommandResult {
+  if (state.events.length === 0) return ok(["No events."]);
+  const rows = [["TYPE", "REASON", "OBJECT", "MESSAGE"]];
+  for (const event of state.events.slice(-16)) {
+    rows.push([event.type, event.reason, event.object, event.message]);
+  }
+  return ok(table(rows));
+}
+
+function getAll(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const output: string[] = [];
+  const sections: [unknown[], () => CommandResult][] = [
+    [state.pods, () => getPods(state, parsed)],
+    [state.services, () => getServices(state)],
+    [state.deployments, () => getDeployments(state, parsed)],
+    [state.statefulSets, () => getStatefulSets(state)],
+    [state.daemonSets, () => getDaemonSets(state)],
+    [state.replicaSets, () => getReplicaSets(state, parsed)],
+    [state.jobs, () => getJobs(state)],
+    [state.cronJobs, () => getCronJobs(state)],
+  ];
+  for (const [collection, render] of sections) {
+    if (collection.length === 0) continue;
+    if (output.length) output.push("");
+    output.push(...render().output);
+  }
+  return ok(output.length ? output : [NOTHING]);
+}
+
+/* ------------------------------------------------------------------ */
+/* describe                                                            */
+/* ------------------------------------------------------------------ */
+
+function describePod(state: ClusterState, name: string): CommandResult {
+  const pod = state.pods.find((candidate) => candidate.name === name);
+  if (!pod) return err(`pods "${name}" not found`);
+
+  const lines = [
+    `Name:             ${pod.name}`,
+    `Namespace:        default`,
+    `Node:             ${pod.node ?? "<none>"}`,
+    `Labels:           ${labelString(pod.labels)}`,
+    `Status:           ${podStatus(pod)}`,
+    `Reason:           ${pod.reason ?? "<none>"}`,
+    `IP:               ${pod.ip}`,
+    `Controlled By:    ${pod.ownerName ? `${pod.ownerKind}/${pod.ownerName}` : "<none>"}`,
+    "Containers:",
+    "  app:",
+    `    Image:          ${pod.image}`,
+    `    Ready:          ${isReady(pod)}`,
+    `    Restart Count:  ${pod.restarts}`,
+  ];
+
+  for (const probe of pod.template.probes ?? []) {
+    lines.push(`    ${probe.kind} probe: http-get http://:80${probe.path}`);
+  }
+  for (const mount of pod.template.mounts ?? []) {
+    const volume = (pod.template.volumes ?? []).find((item) => item.name === mount.name);
+    lines.push(`    Mount:          ${mount.mountPath} from ${mount.name} (${volume?.kind})`);
+  }
+  for (const ref of pod.template.envFrom ?? []) {
+    lines.push(`    EnvFrom:        ${ref.kind} ${ref.name}`);
+  }
+  if (pod.template.nodeSelector) {
+    lines.push(`Node-Selectors:   ${labelString(pod.template.nodeSelector)}`);
+  }
+  if (pod.template.tolerations?.length) {
+    lines.push(
+      `Tolerations:      ${pod.template.tolerations
+        .map((toleration) => `${toleration.key}=${toleration.value ?? ""}:${toleration.effect ?? "*"}`)
+        .join(", ")}`,
+    );
+  }
+  if (!pod.ownerName) {
+    lines.push("", "Note:  This Pod has no controller. If it dies, nothing will recreate it.");
+  }
+
+  const events = state.events.filter((event) => event.object === `pod/${pod.name}`);
+  lines.push("", "Events:");
+  if (events.length === 0) lines.push("  <none>");
+  else for (const event of events.slice(-6)) {
+    lines.push(`  ${event.type}  ${event.reason}  ${event.message}`);
+  }
+  return ok(lines);
+}
+
+function describeDeployment(state: ClusterState, name: string): CommandResult {
+  const deployment = state.deployments.find((item) => item.name === name);
+  if (!deployment) return err(`deployments "${name}" not found`);
+  const sets = replicaSetsOf(state, deployment);
+  const wanted = templateHash(deployment.template);
+  const current = sets.find((rs) => rs.podTemplateHash === wanted);
+  const lines = [
+    `Name:                   ${deployment.name}`,
+    `Selector:               ${labelString(deployment.selector)}`,
+    `Replicas:               ${deployment.replicas} desired`,
+    `StrategyType:           RollingUpdate`,
+    `RollingUpdateStrategy:  1 max unavailable, 1 max surge`,
+    `Image:                  ${deployment.template.image}`,
+    `Revision:               ${deployment.revision}`,
+    `NewReplicaSet:          ${current ? `${current.name} (${current.replicas} replicas)` : "<none>"}`,
+  ];
+  const old = sets.filter((rs) => rs !== current);
+  if (old.length) {
+    lines.push(
+      `OldReplicaSets:         ${old.map((rs) => `${rs.name} (${rs.replicas} replicas)`).join(", ")}`,
+    );
+  }
+  return ok(lines);
+}
+
+function describeService(state: ClusterState, name: string): CommandResult {
+  const service = state.services.find((item) => item.name === name);
+  if (!service) return err(`services "${name}" not found`);
+  const endpoints = endpointsOf(state, service);
+  const lines = [
+    `Name:              ${service.name}`,
+    `Type:              ${service.type}`,
+    `Selector:          ${labelString(service.selector)}`,
+    `IP:                ${service.clusterIP}`,
+    `Port:              ${service.port}/TCP`,
+    `TargetPort:        ${service.targetPort}/TCP`,
+  ];
+  if (service.nodePort) lines.push(`NodePort:          ${service.nodePort}/TCP`);
+  lines.push(
+    `Endpoints:         ${
+      endpoints.length ? endpoints.map((pod) => `${pod.ip}:${service.targetPort}`).join(",") : "<none>"
+    }`,
+  );
+  if (endpoints.length === 0) {
+    lines.push(
+      "",
+      "Note:  No Pod is both matching the selector and Ready, so this Service routes nowhere.",
+    );
+  }
+  return ok(lines);
+}
+
+function describeNode(state: ClusterState, name: string): CommandResult {
+  const node = state.nodes.find((item) => item.name === name);
+  if (!node) return err(`nodes "${name}" not found`);
+  const pods = state.pods.filter((pod) => pod.node === node.name);
+  return ok([
+    `Name:               ${node.name}`,
+    `Roles:              ${node.role}`,
+    `Labels:             ${labelString(node.labels)}`,
+    `Taints:             ${
+      node.taints.length
+        ? node.taints.map((taint) => `${taint.key}=${taint.value}:${taint.effect}`).join(", ")
+        : "<none>"
+    }`,
+    `Ready:              ${node.ready}`,
+    `Non-terminated Pods: ${pods.length}`,
+    ...pods.map((pod) => `  ${pod.name}  ${pod.phase}`),
+  ]);
+}
+
+function describeClaim(state: ClusterState, name: string): CommandResult {
+  const claim = state.persistentVolumeClaims.find((item) => item.name === name);
+  if (!claim) return err(`persistentvolumeclaims "${name}" not found`);
+  return ok([
+    `Name:          ${claim.name}`,
+    `Status:        ${claim.status}`,
+    `Volume:        ${claim.volumeName ?? "<none>"}`,
+    `StorageClass:  ${claim.storageClass ?? "<none>"}`,
+    `Capacity:      ${claim.requestGi}Gi requested`,
+    `Access Modes:  ${claim.accessModes.join(",")}`,
+    ...(claim.reason ? ["", `Warning  FailedBinding  ${claim.reason}`] : []),
+  ]);
+}
+
+function describeIngress(state: ClusterState, name: string): CommandResult {
+  const ingress = state.ingresses.find((item) => item.name === name);
+  if (!ingress) return err(`ingresses "${name}" not found`);
+  const lines = [
+    `Name:             ${ingress.name}`,
+    `Class:            ${ingress.className ?? "<none>"}`,
+    `Address:          ${ingress.address ?? "<pending>"}`,
+    "Rules:",
+  ];
+  for (const rule of ingress.rules) {
+    const service = state.services.find((item) => item.name === rule.service);
+    const endpoints = service ? endpointsOf(state, service).length : 0;
+    lines.push(
+      `  ${rule.host ?? "*"}${rule.path}  ->  ${rule.service}:${rule.port}  ${
+        service ? `(${endpoints} endpoints)` : "(service not found!)"
+      }`,
+    );
+  }
+  return ok(lines);
+}
+
+function describeSimple(
+  state: ClusterState,
+  resource: string,
+  name: string,
+): CommandResult | undefined {
+  if (resource === "replicasets") {
+    const rs = state.replicaSets.find((item) => item.name === name);
+    if (!rs) return err(`replicasets "${name}" not found`);
+    const pods = podsOf(state, rs);
+    return ok([
+      `Name:           ${rs.name}`,
+      `Selector:       ${labelString(rs.selector)}`,
+      `Controlled By:  ${rs.ownerName ? `Deployment/${rs.ownerName}` : "<none>"}`,
+      `Replicas:       ${pods.length} current / ${rs.replicas} desired`,
+      `Image:          ${rs.template.image}`,
+    ]);
+  }
+  if (resource === "configmaps") {
+    const configMap = state.configMaps.find((item) => item.name === name);
+    if (!configMap) return err(`configmaps "${name}" not found`);
+    return ok([
+      `Name:  ${configMap.name}`,
+      "Data",
+      "====",
+      ...Object.entries(configMap.data).map(([key, value]) => `${key}:\n----\n${value}\n`),
+    ]);
+  }
+  if (resource === "secrets") {
+    const secret = state.secrets.find((item) => item.name === name);
+    if (!secret) return err(`secrets "${name}" not found`);
+    return ok([
+      `Name:  ${secret.name}`,
+      `Type:  ${secret.type}`,
+      "Data",
+      "====",
+      ...Object.entries(secret.data).map(([key, value]) => `${key}:  ${value.length} bytes`),
+      "",
+      "Note:  describe never prints Secret values. `kubectl get secret -o yaml` shows base64.",
+    ]);
+  }
+  if (resource === "statefulsets") {
+    const set = state.statefulSets.find((item) => item.name === name);
+    if (!set) return err(`statefulsets "${name}" not found`);
+    return ok([
+      `Name:               ${set.name}`,
+      `Replicas:           ${set.replicas} desired`,
+      `Service Name:       ${set.serviceName}`,
+      `Image:              ${set.template.image}`,
+      `VolumeClaimTemplate: ${
+        set.volumeClaimTemplate
+          ? `${set.volumeClaimTemplate.name} (${set.volumeClaimTemplate.requestGi}Gi)`
+          : "<none>"
+      }`,
+      `Pods:               ${podsOf(state, set)
+        .map((pod) => pod.name)
+        .join(", ")}`,
+    ]);
+  }
+  if (resource === "daemonsets") {
+    const daemonSet = state.daemonSets.find((item) => item.name === name);
+    if (!daemonSet) return err(`daemonsets "${name}" not found`);
+    const pods = podsOf(state, daemonSet);
+    return ok([
+      `Name:           ${daemonSet.name}`,
+      `Selector:       ${labelString(daemonSet.selector)}`,
+      `Node-Selector:  ${labelString(daemonSet.template.nodeSelector ?? {})}`,
+      `Image:          ${daemonSet.template.image}`,
+      `Pods:           ${pods.map((pod) => `${pod.name}@${pod.node}`).join(", ") || "<none>"}`,
+    ]);
+  }
+  if (resource === "jobs") {
+    const job = state.jobs.find((item) => item.name === name);
+    if (!job) return err(`jobs "${name}" not found`);
+    return ok([
+      `Name:            ${job.name}`,
+      `Completions:     ${job.succeeded}/${job.completions}`,
+      `Parallelism:     ${job.parallelism}`,
+      `Backoff Limit:   ${job.backoffLimit}`,
+      `Failed:          ${job.failed}`,
+      `Pods:            ${state.pods
+        .filter((pod) => pod.ownerName === job.name)
+        .map((pod) => `${pod.name} (${pod.phase})`)
+        .join(", ")}`,
+    ]);
+  }
+  if (resource === "persistentvolumes") {
+    const volume = state.persistentVolumes.find((item) => item.name === name);
+    if (!volume) return err(`persistentvolumes "${name}" not found`);
+    return ok([
+      `Name:          ${volume.name}`,
+      `Status:        ${volume.status}`,
+      `Claim:         ${volume.claim ?? "<none>"}`,
+      `Capacity:      ${volume.capacityGi}Gi`,
+      `Access Modes:  ${volume.accessModes.join(",")}`,
+      `StorageClass:  ${volume.storageClass}`,
+    ]);
+  }
+  return undefined;
+}
+
+/* ------------------------------------------------------------------ */
+/* Mutations                                                           */
+/* ------------------------------------------------------------------ */
+
+function runPod(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const name = parsed.names[0];
+  if (!name) return err("NAME is required for `kubectl run`");
+  const image = parsed.flags.image;
+  if (typeof image !== "string") return err("you must specify an image, e.g. --image=nginx:1.21");
+  if (state.pods.some((pod) => pod.name === name)) return err(`pods "${name}" already exists`);
+
+  const labels = parseLabels(parsed.flags.labels) ?? { run: name };
+  createPod(state, { name, template: { image, labels } });
+  return ok([`pod/${name} created`]);
+}
+
+function createResource(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const secretTypes = new Set(["generic", "tls", "docker-registry"]);
+  const names = parsed.names.filter((token) => !secretTypes.has(token));
+  const name = names[0];
+  if (!name) return err("NAME is required");
+
+  if (parsed.resource === "deployments") {
+    const image = parsed.flags.image;
+    if (typeof image !== "string") return err("you must specify --image");
+    if (state.deployments.some((item) => item.name === name)) {
+      return err(`deployments "${name}" already exists`);
     }
-    return { portNum: "80", targetPort: "80" };
+    createDeployment(state, {
+      name,
+      replicas: Number(parsed.flags.replicas ?? 1),
+      template: { image, labels: { app: name } },
+    });
+    return ok([`deployment.apps/${name} created`]);
   }
-  if (typeof ports === "string") {
-    const portNum = ports.split(":")[0];
-    const targetPort = ports.includes(":")
-      ? ports.split(":")[1].includes("/")
-        ? ports.split(":")[1].split("/")[0]
-        : ports.split(":")[1]
-      : portNum;
-    return { portNum, targetPort };
-  }
-  return { portNum: "80", targetPort: "80" };
-}
 
-function cell(value: unknown, width: number, fallback = "-"): string {
-  return String(value ?? fallback).padEnd(width);
-}
-
-export function syncNodes(nodes: ClusterNode[], pods: Pod[]): ClusterNode[] {
-  const effectiveNodes = nodes && nodes.length > 0 ? nodes : DEFAULT_NODES;
-  return effectiveNodes.map((node) => {
-    if (node.roles.includes("control-plane")) {
-      return { ...node, pods: [] };
+  if (parsed.subcommand === "configmap" || parsed.resource === "configmaps") {
+    const data = literalData(parsed);
+    if (!data) return err("use --from-literal=key=value");
+    if (state.configMaps.some((item) => item.name === name)) {
+      return err(`configmaps "${name}" already exists`);
     }
-    const nodePods = pods
-      .filter((p) => (p.node === node.name || (!p.node && node.name === "worker-node-1")) && p.status !== "Terminating")
-      .map((p) => p.name);
-    return { ...node, pods: nodePods };
+    createConfigMap(state, name, data);
+    return ok([`configmap/${name} created`]);
+  }
+
+  if (parsed.subcommand === "secret" || parsed.resource === "secrets") {
+    const data = literalData(parsed);
+    if (!data) return err("use --from-literal=key=value");
+    if (state.secrets.some((item) => item.name === name)) {
+      return err(`secrets "${name}" already exists`);
+    }
+    createSecret(state, name, data);
+    return ok([`secret/${name} created`]);
+  }
+
+  return err("this lab supports `create deployment`, `create configmap` and `create secret generic`");
+}
+
+function literalData(parsed: ParsedCommand): Record<string, string> | undefined {
+  const literals = parsed.repeated["from-literal"];
+  if (!literals?.length) return undefined;
+  const data: Record<string, string> = {};
+  for (const literal of literals) {
+    const [key, ...rest] = literal.split("=");
+    if (key) data[key] = rest.join("=");
+  }
+  return data;
+}
+
+function expose(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const target = parsed.names[0];
+  if (!target) return err("NAME is required for `kubectl expose`");
+
+  let selector: Labels | undefined;
+  if (parsed.resource === "deployments") {
+    selector = state.deployments.find((item) => item.name === target)?.selector;
+    if (!selector) return err(`deployments "${target}" not found`);
+  } else if (parsed.resource === "pods") {
+    selector = state.pods.find((pod) => pod.name === target)?.labels;
+    if (!selector) return err(`pods "${target}" not found`);
+  } else {
+    return err("expose a deployment or a pod in this lab");
+  }
+
+  const name = typeof parsed.flags.name === "string" ? parsed.flags.name : target;
+  if (state.services.some((item) => item.name === name)) {
+    return err(`services "${name}" already exists`);
+  }
+  const port = Number(parsed.flags.port ?? 80);
+  const service = createService(state, {
+    name,
+    type: (parsed.flags.type as Service["type"]) ?? "ClusterIP",
+    selector,
+    port,
+    targetPort: Number(parsed.flags["target-port"] ?? port),
+    nodePort: parsed.flags["node-port"] ? Number(parsed.flags["node-port"]) : undefined,
+  });
+  return ok([`service/${service.name} exposed`]);
+}
+
+function deleteResource(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  if (!parsed.resource) return err("you must specify a resource type, e.g. pod");
+  if (parsed.names.length === 0) return err("resource name is required");
+
+  const messages: string[] = [];
+  for (const name of parsed.names) {
+    switch (parsed.resource) {
+      case "pods": {
+        const pod = state.pods.find((candidate) => candidate.name === name);
+        if (!pod) return err(`pods "${name}" not found`);
+        pod.phase = "Terminating";
+        recordEvent(state, "Normal", "Killing", `pod/${pod.name}`, "Stopping container app");
+        messages.push(`pod "${name}" deleted`);
+        break;
+      }
+      case "replicasets": {
+        const rs = state.replicaSets.find((candidate) => candidate.name === name);
+        if (!rs) return err(`replicasets "${name}" not found`);
+        for (const pod of podsOf(state, rs)) pod.phase = "Terminating";
+        state.replicaSets = state.replicaSets.filter((candidate) => candidate !== rs);
+        messages.push(`replicaset.apps "${name}" deleted`);
+        break;
+      }
+      case "deployments": {
+        const deployment = state.deployments.find((candidate) => candidate.name === name);
+        if (!deployment) return err(`deployments "${name}" not found`);
+        for (const rs of replicaSetsOf(state, deployment)) {
+          for (const pod of podsOf(state, rs)) pod.phase = "Terminating";
+        }
+        state.replicaSets = state.replicaSets.filter((rs) => rs.ownerName !== deployment.name);
+        state.deployments = state.deployments.filter((candidate) => candidate !== deployment);
+        messages.push(`deployment.apps "${name}" deleted`);
+        break;
+      }
+      case "daemonsets": {
+        const daemonSet = state.daemonSets.find((candidate) => candidate.name === name);
+        if (!daemonSet) return err(`daemonsets "${name}" not found`);
+        for (const pod of podsOf(state, daemonSet)) pod.phase = "Terminating";
+        state.daemonSets = state.daemonSets.filter((candidate) => candidate !== daemonSet);
+        messages.push(`daemonset.apps "${name}" deleted`);
+        break;
+      }
+      case "statefulsets": {
+        const set = state.statefulSets.find((candidate) => candidate.name === name);
+        if (!set) return err(`statefulsets "${name}" not found`);
+        for (const pod of podsOf(state, set)) pod.phase = "Terminating";
+        state.statefulSets = state.statefulSets.filter((candidate) => candidate !== set);
+        messages.push(`statefulset.apps "${name}" deleted`);
+        break;
+      }
+      case "jobs": {
+        const job = state.jobs.find((candidate) => candidate.name === name);
+        if (!job) return err(`jobs "${name}" not found`);
+        state.pods = state.pods.filter((pod) => pod.ownerName !== job.name);
+        state.jobs = state.jobs.filter((candidate) => candidate !== job);
+        messages.push(`job.batch "${name}" deleted`);
+        break;
+      }
+      case "cronjobs": {
+        const cronJob = state.cronJobs.find((candidate) => candidate.name === name);
+        if (!cronJob) return err(`cronjobs "${name}" not found`);
+        state.cronJobs = state.cronJobs.filter((candidate) => candidate !== cronJob);
+        messages.push(`cronjob.batch "${name}" deleted`);
+        break;
+      }
+      case "services": {
+        const service = state.services.find((candidate) => candidate.name === name);
+        if (!service) return err(`services "${name}" not found`);
+        state.services = state.services.filter((candidate) => candidate !== service);
+        messages.push(`service "${name}" deleted`);
+        break;
+      }
+      case "ingresses": {
+        const ingress = state.ingresses.find((candidate) => candidate.name === name);
+        if (!ingress) return err(`ingresses "${name}" not found`);
+        state.ingresses = state.ingresses.filter((candidate) => candidate !== ingress);
+        messages.push(`ingress.networking.k8s.io "${name}" deleted`);
+        break;
+      }
+      case "configmaps": {
+        state.configMaps = state.configMaps.filter((candidate) => candidate.name !== name);
+        messages.push(`configmap "${name}" deleted`);
+        break;
+      }
+      case "secrets": {
+        state.secrets = state.secrets.filter((candidate) => candidate.name !== name);
+        messages.push(`secret "${name}" deleted`);
+        break;
+      }
+      case "persistentvolumeclaims": {
+        const claim = state.persistentVolumeClaims.find((candidate) => candidate.name === name);
+        if (!claim) return err(`persistentvolumeclaims "${name}" not found`);
+        const volume = state.persistentVolumes.find((item) => item.name === claim.volumeName);
+        if (volume) {
+          volume.status = "Released";
+          volume.claim = undefined;
+        }
+        state.persistentVolumeClaims = state.persistentVolumeClaims.filter(
+          (candidate) => candidate !== claim,
+        );
+        messages.push(`persistentvolumeclaim "${name}" deleted`);
+        break;
+      }
+      default:
+        return err(`deleting ${parsed.resource} is not supported in this lab`);
+    }
+  }
+  return ok(messages);
+}
+
+function scale(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const replicas = Number(parsed.flags.replicas);
+  if (!Number.isFinite(replicas)) return err("--replicas is required for `kubectl scale`");
+  const name = parsed.names[0];
+  if (!name) return err("resource name is required");
+
+  if (parsed.resource === "deployments") {
+    const deployment = state.deployments.find((item) => item.name === name);
+    if (!deployment) return err(`deployments "${name}" not found`);
+    deployment.replicas = replicas;
+    return ok([`deployment.apps/${name} scaled`]);
+  }
+  if (parsed.resource === "statefulsets") {
+    const set = state.statefulSets.find((item) => item.name === name);
+    if (!set) return err(`statefulsets "${name}" not found`);
+    set.replicas = replicas;
+    return ok([`statefulset.apps/${name} scaled`]);
+  }
+  if (parsed.resource === "replicasets") {
+    const rs = state.replicaSets.find((item) => item.name === name);
+    if (!rs) return err(`replicasets "${name}" not found`);
+    if (rs.ownerName) {
+      return err(
+        `replicaset "${name}" is owned by Deployment/${rs.ownerName}; scale the Deployment instead`,
+      );
+    }
+    rs.replicas = replicas;
+    return ok([`replicaset.apps/${name} scaled`]);
+  }
+  return err("you can scale deployments, statefulsets or replicasets in this lab");
+}
+
+function setImage(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const name = parsed.names[0];
+  const assignment = parsed.names.find((token) => token.includes("="));
+  if (!name || !assignment) return err("usage: kubectl set image deployment/NAME CONTAINER=IMAGE");
+  const image = assignment.split("=").slice(1).join("=");
+  if (!image) return err("an image is required");
+
+  if (parsed.resource === "statefulsets") {
+    const set = state.statefulSets.find((item) => item.name === name);
+    if (!set) return err(`statefulsets "${name}" not found`);
+    set.template.image = image;
+    for (const pod of podsOf(state, set)) pod.phase = "Terminating";
+    return ok([`statefulset.apps/${name} image updated`]);
+  }
+
+  const deployment = state.deployments.find((item) => item.name === name);
+  if (!deployment) return err(`deployments "${name}" not found`);
+  if (deployment.template.image === image) {
+    return ok([`deployment.apps/${name} image not updated (already ${image})`]);
+  }
+  deployment.template.image = image;
+  bumpRevision(deployment, image, `kubectl set image deployment/${name} ${assignment}`);
+  recordEvent(
+    state,
+    "Normal",
+    "DeploymentUpdated",
+    `deployment/${name}`,
+    `Pod template image changed to ${image}`,
+  );
+  return ok([`deployment.apps/${name} image updated`]);
+}
+
+function bumpRevision(deployment: Deployment, image: string, changeCause: string): void {
+  deployment.revision += 1;
+  deployment.history.push({
+    revision: deployment.revision,
+    image,
+    changeCause,
+    template: structuredClone(deployment.template),
   });
 }
 
-export function schedulePodToNode(existingPods: Pod[], nodes: ClusterNode[]): string {
-  const worker1 = "worker-node-1";
-  const worker2 = "worker-node-2";
+function rollout(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const name = parsed.names[0];
+  if (parsed.resource !== "deployments" || !name) {
+    return err("usage: kubectl rollout <status|history|undo|restart> deployment/NAME");
+  }
+  const deployment = state.deployments.find((item) => item.name === name);
+  if (!deployment) return err(`deployments "${name}" not found`);
 
-  const count1 = existingPods.filter((p) => (p.node === worker1 || !p.node) && p.status !== "Terminating").length;
-  const count2 = existingPods.filter((p) => p.node === worker2 && p.status !== "Terminating").length;
-
-  if (count1 <= count2) {
-    return worker1;
-  } else {
-    return worker2;
+  switch (parsed.subcommand) {
+    case "status": {
+      const sets = replicaSetsOf(state, deployment);
+      const wanted = templateHash(deployment.template);
+      const current = sets.find((rs) => rs.podTemplateHash === wanted);
+      const pods = current ? podsOf(state, current) : [];
+      const ready = pods.filter(isReady).length;
+      const stuck = pods.some(
+        (pod) => pod.phase === "ImagePullBackOff" || pod.phase === "CrashLoopBackOff",
+      );
+      if (stuck) {
+        return ok([
+          `Waiting for deployment "${name}" rollout to finish: ${ready} of ${deployment.replicas} updated replicas are available...`,
+          `error: the rollout is stuck. New Pods never became Ready.`,
+        ]);
+      }
+      if (ready >= deployment.replicas && sets.every((rs) => rs === current || rs.replicas === 0)) {
+        return ok([`deployment "${name}" successfully rolled out`]);
+      }
+      return ok([
+        `Waiting for deployment "${name}" rollout to finish: ${ready} of ${deployment.replicas} updated replicas are available...`,
+      ]);
+    }
+    case "history": {
+      const rows = [["REVISION", "CHANGE-CAUSE"]];
+      for (const entry of deployment.history) {
+        rows.push([String(entry.revision), `${entry.changeCause}  (image: ${entry.image})`]);
+      }
+      return ok([`deployment.apps/${name}`, ...table(rows)]);
+    }
+    case "undo": {
+      const target = parsed.flags["to-revision"]
+        ? Number(parsed.flags["to-revision"])
+        : deployment.revision - 1;
+      const entry = deployment.history.find((item) => item.revision === target);
+      if (!entry) return err(`unable to find specified revision ${target} in history`);
+      deployment.template = structuredClone(entry.template);
+      bumpRevision(
+        deployment,
+        entry.image,
+        `kubectl rollout undo deployment/${name} (to revision ${target})`,
+      );
+      recordEvent(
+        state,
+        "Normal",
+        "DeploymentRolledBack",
+        `deployment/${name}`,
+        `Rolled back to ${entry.image}`,
+      );
+      return ok([`deployment.apps/${name} rolled back`]);
+    }
+    case "restart": {
+      deployment.template.env = {
+        ...(deployment.template.env ?? {}),
+        RESTARTED_AT: String(state.clock),
+      };
+      bumpRevision(
+        deployment,
+        deployment.template.image,
+        `kubectl rollout restart deployment/${name}`,
+      );
+      return ok([`deployment.apps/${name} restarted`]);
+    }
+    default:
+      return err(`unknown rollout subcommand "${parsed.subcommand ?? ""}"`);
   }
 }
 
-export function getPodIpForNode(nodeName: string): string {
-  const subnet = nodeName === "worker-node-2" ? "2" : "1";
-  const host = Math.floor(Math.random() * 200) + 10;
-  return `10.244.${subnet}.${host}`;
-}
+function labelCommand(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const [target, ...assignments] = parsed.names;
+  if (!target || assignments.length === 0) return err("usage: kubectl label node NAME key=value");
 
-function parseYamlDocuments(content: string): any[] {
-  try {
-    const docs = YAML.parseAllDocuments(content);
-    const results: any[] = [];
-    for (const doc of docs) {
-      const json = doc.toJSON();
-      if (json && typeof json === "object") {
-        if (json.kind === "List" && Array.isArray(json.items)) {
-          results.push(...json.items);
-        } else {
-          results.push(json);
-        }
+  if (parsed.resource === "nodes") {
+    const node = state.nodes.find((item) => item.name === target);
+    if (!node) return err(`nodes "${target}" not found`);
+    for (const assignment of assignments) {
+      if (assignment.endsWith("-")) delete node.labels[assignment.slice(0, -1)];
+      else {
+        const [key, value] = assignment.split("=");
+        node.labels[key] = value ?? "";
       }
     }
-    if (results.length > 0) return results;
-  } catch {
-    // Continue to single parse fallback
+    return ok([`node/${target} labeled`]);
   }
-
-  try {
-    const single = YAML.parse(content);
-    if (single && typeof single === "object") {
-      if (single.kind === "List" && Array.isArray(single.items)) {
-        return single.items;
+  if (parsed.resource === "pods") {
+    const pod = state.pods.find((item) => item.name === target);
+    if (!pod) return err(`pods "${target}" not found`);
+    for (const assignment of assignments) {
+      if (assignment.endsWith("-")) delete pod.labels[assignment.slice(0, -1)];
+      else {
+        const [key, value] = assignment.split("=");
+        pod.labels[key] = value ?? "";
       }
-      return [single];
     }
-  } catch {
-    return [];
+    return ok([`pod/${target} labeled`]);
   }
-  return [];
+  return err("this lab can label nodes and pods");
 }
 
-export function executeCommand(
-  input: string,
+function taintCommand(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const [target, ...specs] = parsed.names;
+  if (!target || specs.length === 0) {
+    return err("usage: kubectl taint nodes NAME key=value:NoSchedule");
+  }
+  const node = state.nodes.find((item) => item.name === target);
+  if (!node) return err(`nodes "${target}" not found`);
+
+  for (const spec of specs) {
+    if (spec.endsWith("-")) {
+      const key = spec.slice(0, -1).split("=")[0].split(":")[0];
+      node.taints = node.taints.filter((taint) => taint.key !== key);
+      continue;
+    }
+    const [pair, effect] = spec.split(":");
+    const [key, value] = pair.split("=");
+    if (effect !== "NoSchedule" && effect !== "NoExecute") {
+      return err(`unsupported taint effect "${effect}"; use NoSchedule or NoExecute`);
+    }
+    node.taints.push({ key, value: value ?? "", effect });
+    if (effect === "NoExecute") {
+      for (const pod of state.pods) {
+        if (pod.node !== node.name) continue;
+        const tolerated = (pod.template.tolerations ?? []).some(
+          (toleration) => toleration.key === key,
+        );
+        if (!tolerated) pod.phase = "Terminating";
+      }
+    }
+  }
+  return ok([`node/${target} tainted`]);
+}
+
+function applyFile(
   state: ClusterState,
-  currentStep?: LessonStep
-): ExecutionResult {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return { output: "", newState: state, isCorrect: false };
+  parsed: ParsedCommand,
+  context: ExecContext,
+): CommandResult {
+  const filename = parsed.flags.filename;
+  if (typeof filename !== "string") return err("usage: kubectl apply -f FILENAME");
+  const file = context.files[filename];
+  if (!file) return err(`the path "${filename}" does not exist in this lesson`);
+
+  const documents = Array.isArray(file.doc) ? file.doc : [file.doc];
+  const output: string[] = [];
+  for (const document of documents) {
+    const outcome = applyDocument(state, document as Record<string, unknown>);
+    if (outcome.error) return err(outcome.error);
+    if (outcome.message) output.push(outcome.message);
+  }
+  return ok(output);
+}
+
+/* ------------------------------------------------------------------ */
+/* logs, exec and curl                                                 */
+/* ------------------------------------------------------------------ */
+
+function logs(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const name = parsed.names[0];
+  if (!name) return err("usage: kubectl logs POD");
+  const pod = state.pods.find((candidate) => candidate.name === name);
+  if (!pod) return err(`pods "${name}" not found`);
+  if (pod.logs.length === 0) {
+    return ok([`No logs yet for ${pod.name} (status ${pod.phase}).`]);
+  }
+  return ok(pod.logs.slice(-20));
+}
+
+function execInPod(state: ClusterState, parsed: ParsedCommand): CommandResult {
+  const name = parsed.names[0];
+  if (!name) return err("usage: kubectl exec POD -- COMMAND");
+  const pod = state.pods.find((candidate) => candidate.name === name);
+  if (!pod) return err(`pods "${name}" not found`);
+  if (pod.phase !== "Running") {
+    return err(`cannot exec into a pod in ${pod.phase} state`);
   }
 
-  if (trimmed === "clear") {
-    return { output: "__CLEAR__", newState: state, isCorrect: false };
+  const args = [...parsed.execArgs];
+  if (args.length === 0) return err("no command supplied; use `-- COMMAND`");
+  if (args[0] === "sh" || args[0] === "bash") {
+    const index = args.indexOf("-c");
+    if (index !== -1) return runShell(state, pod, args.slice(index + 1).join(" "));
+    return ok(["This lab has no interactive shell. Use: kubectl exec POD -- sh -c '<command>'"]);
+  }
+  return runShell(state, pod, args.join(" "));
+}
+
+function runShell(state: ClusterState, pod: Pod, line: string): CommandResult {
+  const command = line.trim();
+
+  const redirect = /^echo\s+(.+?)\s*>\s*(\S+)$/.exec(command);
+  if (redirect) {
+    const content = redirect[1].replace(/^["']|["']$/g, "");
+    const result = writePath(state, pod, redirect[2], content);
+    return result.ok ? ok([]) : err(result.error);
   }
 
-  // Ensure initial nodes and files exist
-  const initialNodes = state.nodes && state.nodes.length > 0 ? state.nodes : DEFAULT_NODES;
-  const initialFiles = state.files && Object.keys(state.files).length > 0 ? state.files : DEFAULT_FILES;
+  const [binary, ...rest] = command.split(/\s+/);
+  switch (binary) {
+    case "cat": {
+      const result = readPath(state, pod, rest[0] ?? "");
+      return result.ok ? ok([result.content]) : err(`cat: ${result.error}`);
+    }
+    case "ls": {
+      const entries = listPath(state, pod, rest[0] ?? "/");
+      return ok(entries.length ? entries : ["(empty)"]);
+    }
+    case "hostname":
+      return ok([pod.name]);
+    case "env":
+    case "printenv":
+      return ok(
+        Object.entries(podEnv(state, pod))
+          .map(([key, value]) => `${key}=${value}`)
+          .sort(),
+      );
+    case "echo":
+      return ok([rest.join(" ").replace(/^["']|["']$/g, "")]);
+    case "nslookup": {
+      const service = state.services.find((item) => item.name === rest[0]);
+      if (!service) return err(`nslookup: can't resolve '${rest[0]}'`);
+      return ok([
+        `Name:    ${service.name}.default.svc.cluster.local`,
+        `Address: ${service.clusterIP}`,
+      ]);
+    }
+    case "curl":
+    case "wget":
+      return curl(state, rest.filter((token) => !token.startsWith("-"))[0] ?? "");
+    default:
+      return err(`${binary}: not found in this simulated container`);
+  }
+}
 
-  const nextState: ClusterState = {
-    nodes: syncNodes(initialNodes, state.pods || []),
-    pods: (state.pods || []).map((p) => ({
-      ...p,
-      node: p.node || "worker-node-1",
-      ip: p.ip || getPodIpForNode(p.node || "worker-node-1"),
-    })),
-    replicaSets: [...(state.replicaSets || [])],
-    deployments: [...(state.deployments || [])],
-    daemonSets: [...(state.daemonSets || [])],
-    statefulSets: [...(state.statefulSets || [])],
-    jobs: [...(state.jobs || [])],
-    cronJobs: [...(state.cronJobs || [])],
-    services: [...(state.services || [])],
-    namespaces: [...(state.namespaces || [])],
-    configMaps: [...(state.configMaps || [])],
-    secrets: [...(state.secrets || [])],
-    files: { ...initialFiles },
-    lastActionImpact: state.lastActionImpact,
-  };
+interface ResolvedTarget {
+  service: Service;
+  via?: string;
+}
 
-  const parsed = parseCommand(input);
+function resolveTarget(state: ClusterState, host: string, port: number, path: string):
+  | ResolvedTarget
+  | { error: string } {
+  const byName = state.services.find((item) => item.name === host || item.clusterIP === host);
+  if (byName) return { service: byName };
 
-  // Shell Command Execution
-  if (parsed.isShellCommand || (!parsed.isKubectl && ["cat", "ls", "vim", "vi", "rm", "touch", "echo", "pwd"].includes(parsed.verb))) {
-    return handleShellCommand(input, parsed, nextState, currentStep);
+  const node = state.nodes.find((item) => item.name === host);
+  if (node) {
+    const service = state.services.find((item) => item.nodePort === port);
+    if (service) return { service, via: `node ${node.name}:${port}` };
+    return { error: `curl: (7) Failed to connect to ${host} port ${port}: Connection refused` };
   }
 
-  if (!parsed.isKubectl) {
-    if (trimmed === "help") {
+  for (const ingress of state.ingresses) {
+    const rules = ingress.rules.filter(
+      (rule) => rule.host === host || (!rule.host && host === ingress.address),
+    );
+    if (rules.length === 0) continue;
+    if (!ingress.address) {
+      return { error: `curl: (7) ingress ${ingress.name} has no address yet` };
+    }
+    const match = rules
+      .filter((rule) => path.startsWith(rule.path))
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    if (!match) {
+      return { error: `HTTP 404 Not Found — ingress ${ingress.name} has no rule for ${path}` };
+    }
+    const service = state.services.find((item) => item.name === match.service);
+    if (!service) {
       return {
-        output: `Available kubectl commands:
-  kubectl get nodes [-o wide]
-  kubectl describe node <name>
-  kubectl run <name> --image=<image> [--dry-run=client -o yaml > file.yaml]
-  kubectl apply -f <file.yaml>
-  kubectl create -f <file.yaml>
-  kubectl delete -f <file.yaml>
-  kubectl get pods | rs | deployments | ds | sts | jobs | cronjobs | svc | ns | cm | secrets [-o wide]
-  kubectl describe pod <name> | svc <name> | deployment <name> | node <name>
-  kubectl delete pod <name> | deployment <name> | svc <name>
-  kubectl scale rs <name> --replicas=<num>
-  kubectl scale deployment <name> --replicas=<num>
-  kubectl set image deployment/<name> <container>=<image>
-  kubectl rollout status | history | undo deployment/<name>
-  kubectl logs <pod-name>
-  kubectl events
-
-Shell utilities:
-  ls
-  cat <file.yaml>
-  vim <file.yaml>
-  rm <file.yaml>`,
-        newState: nextState,
-        isCorrect: false,
+        error: `HTTP 503 Service Unavailable — ingress ${ingress.name} points at service "${match.service}", which does not exist`,
       };
     }
+    return { service, via: `ingress/${ingress.name} (${match.host ?? "*"}${match.path})` };
+  }
 
+  return { error: `curl: (6) Could not resolve host: ${host}` };
+}
+
+function curl(state: ClusterState, url: string): CommandResult {
+  if (!url) return err("usage: curl http://HOST[:PORT][/PATH]");
+  const match = /^(?:https?:\/\/)?([^/:]+)(?::(\d+))?(\/.*)?$/.exec(url.trim());
+  if (!match) return err(`curl: (3) URL using bad/illegal format: ${url}`);
+
+  const [, host, portText, rawPath] = match;
+  const path = rawPath ?? "/";
+  const target = resolveTarget(state, host, Number(portText ?? 80), path);
+  if ("error" in target) return { output: [target.error], isError: true };
+
+  const { service, via } = target;
+  const endpoints = endpointsOf(state, service);
+  if (endpoints.length === 0) {
     return {
-      output: `bash: ${parsed.raw.split(" ")[0]}: command not found. Try running a kubectl command or type 'help'.`,
-      newState: nextState,
-      isCorrect: false,
+      output: [
+        `HTTP 503 Service Unavailable — service/${service.name} has no ready endpoints.`,
+        `  selector: ${labelString(service.selector)}`,
+      ],
+      isError: true,
     };
   }
 
-  let output = "";
-  let matchedChallenge = false;
-  const { verb, resource, name, flags, args, file, redirectToFile, subVerb } = parsed;
-
-  const affectedNodes: string[] = [];
-  const affectedPods: string[] = [];
-  let summary = "";
-  let controlPlaneEvents: string[] = [];
-  let dataPlaneEvents: string[] = [];
-  let componentFlow: string[] = ["Terminal", "kube-apiserver"];
-  let actionDescription = "Command processed by kube-apiserver";
-
-  // 1. APPLY / CREATE -f / DELETE -f
-  if (verb === "apply" || ((verb === "create" || verb === "delete") && file)) {
-    const fileName = file || args[0];
-    if (!fileName) {
-      output = `error: must specify one of -f and -k`;
-      summary = `Failed ${verb} command: missing file argument`;
-      controlPlaneEvents = [`kube-apiserver rejected command: missing file specification (-f).`];
-      dataPlaneEvents = [`No data plane changes.`];
-    } else if (!nextState.files[fileName]) {
-      output = `error: the path "${fileName}" does not exist`;
-      summary = `Failed ${verb} command: file "${fileName}" not found in local workspace`;
-      controlPlaneEvents = [`Local file lookup for "${fileName}" failed before transmission to API server.`];
-      dataPlaneEvents = [`No data plane changes.`];
-    } else {
-      const yamlContent = nextState.files[fileName];
-      const docs = parseYamlDocuments(yamlContent);
-
-      if (docs.length === 0) {
-        output = `error: no objects passed to ${verb}`;
-        summary = `Empty or invalid YAML file "${fileName}"`;
-        controlPlaneEvents = [`kube-apiserver could not parse valid Kubernetes resource from "${fileName}".`];
-        dataPlaneEvents = [`No data plane changes.`];
-      } else {
-        const results: string[] = [];
-
-        for (const doc of docs) {
-          const kind = (doc.kind || "Pod") as string;
-          const metaName = doc.metadata?.name || doc.name || "unnamed";
-          const labels = doc.metadata?.labels || {};
-          const namespace = doc.metadata?.namespace || "default";
-
-          if (verb === "delete") {
-            // DELETE FROM FILE
-            const normKind = normalizeResource(kind);
-            if (normKind === "pod") {
-              nextState.pods = nextState.pods.filter((p) => p.name !== metaName);
-              results.push(`pod "${metaName}" deleted`);
-              affectedPods.push(metaName);
-            } else if (normKind === "deployment") {
-              nextState.deployments = nextState.deployments.filter((d) => d.name !== metaName);
-              nextState.replicaSets = nextState.replicaSets.filter((rs) => !rs.name.startsWith(metaName) && rs.ownerRef?.name !== metaName);
-              nextState.pods = nextState.pods.filter((p) => !p.name.startsWith(metaName) && p.ownerRef?.name !== metaName);
-              results.push(`deployment.apps "${metaName}" deleted`);
-            } else if (normKind === "replicaset") {
-              nextState.replicaSets = nextState.replicaSets.filter((rs) => rs.name !== metaName);
-              nextState.pods = nextState.pods.filter((p) => p.ownerRef?.name !== metaName);
-              results.push(`replicaset.apps "${metaName}" deleted`);
-            } else if (normKind === "service") {
-              nextState.services = nextState.services.filter((s) => s.name !== metaName);
-              results.push(`service "${metaName}" deleted`);
-            } else if (normKind === "configmap") {
-              nextState.configMaps = nextState.configMaps.filter((cm) => cm.name !== metaName);
-              results.push(`configmap "${metaName}" deleted`);
-            } else if (normKind === "secret") {
-              nextState.secrets = nextState.secrets.filter((sec) => sec.name !== metaName);
-              results.push(`secret "${metaName}" deleted`);
-            } else {
-              results.push(`${kind.toLowerCase()} "${metaName}" deleted`);
-            }
-          } else {
-            // APPLY OR CREATE
-            const normKind = normalizeResource(kind);
-
-            if (normKind === "pod") {
-              const image = doc.spec?.containers?.[0]?.image || doc.image || "nginx:latest";
-              const existingIdx = nextState.pods.findIndex((p) => p.name === metaName);
-              const assignedNode = schedulePodToNode(nextState.pods, nextState.nodes);
-              const assignedIp = getPodIpForNode(assignedNode);
-
-              if (existingIdx >= 0) {
-                if (verb === "create") {
-                  results.push(`Error from server (AlreadyExists): pods "${metaName}" already exists`);
-                } else {
-                  nextState.pods[existingIdx] = {
-                    ...nextState.pods[existingIdx],
-                    image,
-                    labels: { ...(nextState.pods[existingIdx].labels || {}), ...labels },
-                  };
-                  results.push(`pod/${metaName} configured`);
-                  affectedPods.push(metaName);
-                  if (nextState.pods[existingIdx].node) affectedNodes.push(nextState.pods[existingIdx].node!);
-                }
-              } else {
-                const newPod: Pod = {
-                  name: metaName,
-                  image,
-                  status: "Running",
-                  node: assignedNode,
-                  ip: assignedIp,
-                  labels,
-                  namespace,
-                  restarts: 0,
-                  age: "10s",
-                };
-                nextState.pods.push(newPod);
-                results.push(`pod/${metaName} created`);
-                affectedPods.push(metaName);
-                affectedNodes.push(assignedNode);
-              }
-            } else if (normKind === "deployment") {
-              const replicas = doc.spec?.replicas ?? 1;
-              const image = doc.spec?.template?.spec?.containers?.[0]?.image || "nginx:latest";
-              const matchLabels = doc.spec?.selector?.matchLabels || labels;
-              const existingIdx = nextState.deployments.findIndex((d) => d.name === metaName);
-
-              if (existingIdx >= 0) {
-                const dep = nextState.deployments[existingIdx];
-                dep.replicas = replicas;
-                dep.image = image;
-                dep.available = replicas;
-                dep.upToDate = replicas;
-                dep.revision += 1;
-                results.push(`deployment.apps/${metaName} configured`);
-              } else {
-                const dep: Deployment = {
-                  name: metaName,
-                  replicas,
-                  available: replicas,
-                  upToDate: replicas,
-                  image,
-                  labels,
-                  matchLabels,
-                  revision: 1,
-                  age: "5s",
-                  namespace,
-                };
-                nextState.deployments.push(dep);
-
-                const rsName = `${metaName}-v1`;
-                nextState.replicaSets.push({
-                  name: rsName,
-                  desiredReplicas: replicas,
-                  currentReplicas: replicas,
-                  readyReplicas: replicas,
-                  image,
-                  ownerRef: { kind: "Deployment", name: metaName },
-                  labels,
-                  matchLabels,
-                  age: "5s",
-                  namespace,
-                });
-
-                for (let i = 0; i < replicas; i++) {
-                  const node = schedulePodToNode(nextState.pods, nextState.nodes);
-                  const pName = `${metaName}-${Math.random().toString(36).substring(2, 7)}`;
-                  nextState.pods.push({
-                    name: pName,
-                    image,
-                    status: "Running",
-                    node,
-                    ip: getPodIpForNode(node),
-                    labels: matchLabels,
-                    ownerRef: { kind: "ReplicaSet", name: rsName },
-                    restarts: 0,
-                    age: "5s",
-                    namespace,
-                  });
-                  affectedPods.push(pName);
-                  if (!affectedNodes.includes(node)) affectedNodes.push(node);
-                }
-                results.push(`deployment.apps/${metaName} created`);
-              }
-            } else if (normKind === "replicaset") {
-              const replicas = doc.spec?.replicas ?? 1;
-              const image = doc.spec?.template?.spec?.containers?.[0]?.image || "nginx:latest";
-              const matchLabels = doc.spec?.selector?.matchLabels || labels;
-              const existingIdx = nextState.replicaSets.findIndex((r) => r.name === metaName);
-
-              if (existingIdx >= 0) {
-                nextState.replicaSets[existingIdx].desiredReplicas = replicas;
-                nextState.replicaSets[existingIdx].currentReplicas = replicas;
-                nextState.replicaSets[existingIdx].readyReplicas = replicas;
-                nextState.replicaSets[existingIdx].image = image;
-                results.push(`replicaset.apps/${metaName} configured`);
-              } else {
-                nextState.replicaSets.push({
-                  name: metaName,
-                  desiredReplicas: replicas,
-                  currentReplicas: replicas,
-                  readyReplicas: replicas,
-                  image,
-                  labels,
-                  matchLabels,
-                  age: "5s",
-                  namespace,
-                });
-
-                for (let i = 0; i < replicas; i++) {
-                  const node = schedulePodToNode(nextState.pods, nextState.nodes);
-                  const pName = `${metaName}-${Math.random().toString(36).substring(2, 7)}`;
-                  nextState.pods.push({
-                    name: pName,
-                    image,
-                    status: "Running",
-                    node,
-                    ip: getPodIpForNode(node),
-                    labels: matchLabels,
-                    ownerRef: { kind: "ReplicaSet", name: metaName },
-                    restarts: 0,
-                    age: "5s",
-                    namespace,
-                  });
-                  affectedPods.push(pName);
-                  if (!affectedNodes.includes(node)) affectedNodes.push(node);
-                }
-                results.push(`replicaset.apps/${metaName} created`);
-              }
-            } else if (normKind === "daemonset") {
-              const image = doc.spec?.template?.spec?.containers?.[0]?.image || "fluentd:latest";
-              nextState.daemonSets.push({
-                name: metaName,
-                desiredNodes: 2,
-                currentPods: 2,
-                readyPods: 2,
-                image,
-                age: "5s",
-                namespace,
-              });
-
-              ["worker-node-1", "worker-node-2"].forEach((node) => {
-                const pName = `${metaName}-${node.slice(-1)}${Math.random().toString(36).substring(2, 5)}`;
-                nextState.pods.push({
-                  name: pName,
-                  image,
-                  status: "Running",
-                  node,
-                  ip: getPodIpForNode(node),
-                  ownerRef: { kind: "DaemonSet", name: metaName },
-                  restarts: 0,
-                  age: "5s",
-                  namespace,
-                });
-                affectedPods.push(pName);
-                if (!affectedNodes.includes(node)) affectedNodes.push(node);
-              });
-              results.push(`daemonset.apps/${metaName} created`);
-            } else if (normKind === "service") {
-              const type = doc.spec?.type || "ClusterIP";
-              const ports = doc.spec?.ports || [{ port: 80, targetPort: 80 }];
-              const selector = doc.spec?.selector || {};
-              const clusterIP = `10.96.${Math.floor(Math.random() * 200) + 1}.${Math.floor(Math.random() * 200) + 1}`;
-
-              const existingIdx = nextState.services.findIndex((s) => s.name === metaName);
-              if (existingIdx >= 0) {
-                nextState.services[existingIdx] = {
-                  ...nextState.services[existingIdx],
-                  type,
-                  ports,
-                  selector,
-                };
-                results.push(`service/${metaName} configured`);
-              } else {
-                nextState.services.push({
-                  name: metaName,
-                  type,
-                  clusterIP,
-                  ports,
-                  selector,
-                  age: "5s",
-                  namespace,
-                });
-                results.push(`service/${metaName} created`);
-              }
-            } else if (normKind === "configmap") {
-              const data = doc.data || {};
-              const existingIdx = nextState.configMaps.findIndex((cm) => cm.name === metaName);
-              if (existingIdx >= 0) {
-                nextState.configMaps[existingIdx].data = data;
-                results.push(`configmap/${metaName} configured`);
-              } else {
-                nextState.configMaps.push({
-                  name: metaName,
-                  data,
-                  age: "5s",
-                  namespace,
-                });
-                results.push(`configmap/${metaName} created`);
-              }
-            } else if (normKind === "secret") {
-              const data = doc.data || doc.stringData || {};
-              const type = doc.type || "Opaque";
-              const existingIdx = nextState.secrets.findIndex((s) => s.name === metaName);
-              if (existingIdx >= 0) {
-                nextState.secrets[existingIdx].data = data;
-                results.push(`secret/${metaName} configured`);
-              } else {
-                nextState.secrets.push({
-                  name: metaName,
-                  type,
-                  data,
-                  age: "5s",
-                  namespace,
-                });
-                results.push(`secret/${metaName} created`);
-              }
-            } else if (normKind === "namespace") {
-              nextState.namespaces.push({
-                name: metaName,
-                status: "Active",
-                age: "5s",
-              });
-              results.push(`namespace/${metaName} created`);
-            } else {
-              results.push(`${kind.toLowerCase()}/${metaName} created`);
-            }
-          }
-        }
-
-        output = results.join("\n");
-        nextState.nodes = syncNodes(nextState.nodes, nextState.pods);
-
-        const targetNode = affectedNodes[0] || "worker-node-1";
-        summary = `Applied declarative manifest "${fileName}". kube-apiserver parsed and validated the resource specifications and stored the desired state into etcd. kube-scheduler assigned workloads across worker nodes.`;
-        controlPlaneEvents = [
-          `kube-apiserver: Decoded and validated YAML manifest "${fileName}" against OpenAPI schemas.`,
-          `etcd: Persisted updated resource state definitions under the registry keys.`,
-          `kube-scheduler: Evaluated node resource allocations and selected optimal worker nodes.`,
-          `kube-controller-manager: Reconciled object state and initiated pod provisioning.`,
-        ];
-        dataPlaneEvents = [
-          `kubelet (${targetNode}): Received pod specification via API server watch stream.`,
-          `CRI (Container Runtime): Initialized container sandbox and started container processes.`,
-          `CNI: Allocated pod IP and established network routing on host bridge.`,
-        ];
-        componentFlow = ["Terminal", "kube-apiserver", "etcd", "kube-scheduler", "kubelet", "CRI"];
-        actionDescription = `Manifest '${fileName}' applied → API Server validated schema & wrote to etcd → Scheduler assigned nodes → kubelet invoked CRI to launch containers.`;
-      }
-    }
-  }
-
-  // 2. RUN
-  else if (verb === "run") {
-    if (!name) {
-      output = `error: NAME is required for run`;
-      summary = `Missing Pod name for 'kubectl run'`;
-    } else {
-      const image = (flags.image as string) || "nginx:latest";
-      const isDryRun = Boolean(flags["dry-run"] || flags.dryRun);
-      const isYamlOutput = (flags.output === "yaml" || flags.o === "yaml");
-
-      if (isDryRun && isYamlOutput) {
-        const yamlOutput = `apiVersion: v1
-kind: Pod
-metadata:
-  creationTimestamp: null
-  labels:
-    run: ${name}
-  name: ${name}
-spec:
-  containers:
-  - image: ${image}
-    name: ${name}
-    resources: {}
-  dnsPolicy: ClusterFirst
-  restartPolicy: Always
-status: {}
-`;
-        if (redirectToFile) {
-          nextState.files[redirectToFile] = yamlOutput;
-          output = ""; // Silent redirect in shell
-          summary = `Generated declarative Pod YAML for '${name}' via --dry-run=client and wrote to '${redirectToFile}'.`;
-          controlPlaneEvents = [`Client-side dry-run generated Pod manifest locally without contacting the cluster API.`];
-          dataPlaneEvents = [`Saved generated YAML into virtual file system at '${redirectToFile}'.`];
-        } else {
-          output = yamlOutput.trim();
-          summary = `Rendered declarative Pod YAML for '${name}' via --dry-run=client.`;
-          controlPlaneEvents = [`Client-side dry-run evaluated Pod configuration.`];
-          dataPlaneEvents = [`Manifest displayed in stdout.`];
-        }
-        componentFlow = ["Terminal"];
-        actionDescription = `Client generated dry-run Pod specification without modifying cluster state.`;
-      } else {
-        const existing = nextState.pods.find((p) => p.name === name);
-        if (existing) {
-          output = `Error from server (AlreadyExists): pods "${name}" already exists`;
-          summary = `Pod '${name}' already exists in the cluster.`;
-          controlPlaneEvents = [`kube-apiserver rejected creation: Pod '${name}' already registered in etcd.`];
-          dataPlaneEvents = [`No changes to worker nodes.`];
-        } else {
-          const assignedNode = schedulePodToNode(nextState.pods, nextState.nodes);
-          const assignedIp = getPodIpForNode(assignedNode);
-          const newPod: Pod = {
-            name,
-            image,
-            status: "Running",
-            node: assignedNode,
-            ip: assignedIp,
-            labels: { run: name },
-            restarts: 0,
-            age: "5s",
-          };
-          nextState.pods.push(newPod);
-          nextState.nodes = syncNodes(nextState.nodes, nextState.pods);
-          output = `pod/${name} created`;
-
-          affectedPods.push(name);
-          affectedNodes.push(assignedNode);
-          summary = `Created standalone Pod '${name}'. kube-apiserver authenticated the request, etcd committed the object, kube-scheduler selected ${assignedNode}, and kubelet instructed the CRI to start the container.`;
-          controlPlaneEvents = [
-            `kube-apiserver: Validated PodSpec for '${name}' and persisted state to etcd.`,
-            `kube-scheduler: Filtered and scored worker nodes, selecting '${assignedNode}'.`,
-            `kube-apiserver: Created NodeBinding object binding '${name}' to '${assignedNode}'.`,
-          ];
-          dataPlaneEvents = [
-            `kubelet (${assignedNode}): Detected new Pod binding via watch stream.`,
-            `CRI (containerd): Pulled image '${image}', initialized Linux cgroups & namespaces.`,
-            `CNI: Allocated IP '${assignedIp}' to container interface eth0.`,
-            `kubelet (${assignedNode}): Confirmed running status and updated API server.`,
-          ];
-          componentFlow = ["Terminal", "kube-apiserver", "etcd", "kube-scheduler", "kubelet", "CRI"];
-          actionDescription = `API Server validated Pod '${name}' & stored in etcd → Scheduler assigned ${assignedNode} → kubelet instructed CRI to pull '${image}' and start container.`;
-        }
-      }
-    }
-  }
-
-  // 3. GET
-  else if (verb === "get") {
-    const isWide = flags.output === "wide" || flags.o === "wide";
-    const targetNs = (flags.namespace || flags.n) as string | undefined;
-    const allNamespaces = Boolean(flags.allNamespaces || flags.A);
-
-    if (resource === "node" || resource === "nodes") {
-      if (name) {
-        const node = nextState.nodes.find((n) => n.name === name);
-        if (!node) {
-          output = `Error from server (NotFound): nodes "${name}" not found`;
-        } else {
-          output = `NAME            STATUS   ROLES           AGE   VERSION\n${cell(node.name, 15)} ${cell(node.status, 8)} ${cell(node.roles.join(","), 15)} 10d   v1.28.2`;
-        }
-      } else {
-        if (isWide) {
-          const header = `NAME            STATUS   ROLES           AGE   VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION     CONTAINER-RUNTIME`;
-          const rows = nextState.nodes.map(
-            (n) => `${cell(n.name, 15)} ${cell(n.status, 8)} ${cell(n.roles.join(","), 15)} 10d   v1.28.2   ${cell(n.ip, 13)} <none>        Ubuntu 22.04.3 LTS   5.15.0-88-generic  containerd://1.7.5`
-          );
-          output = [header, ...rows].join("\n");
-        } else {
-          const header = `NAME            STATUS   ROLES           AGE   VERSION`;
-          const rows = nextState.nodes.map(
-            (n) => `${cell(n.name, 15)} ${cell(n.status, 8)} ${cell(n.roles.join(","), 15)} 10d   v1.28.2`
-          );
-          output = [header, ...rows].join("\n");
-        }
-      }
-      summary = `Retrieved cluster node topology and health statuses directly from etcd.`;
-    } else if (resource === "pod" || resource === "pods") {
-      let filteredPods = nextState.pods;
-      if (targetNs && !allNamespaces) {
-        filteredPods = filteredPods.filter((p) => (p.namespace || "default") === targetNs);
-      }
-
-      if (name) {
-        const p = filteredPods.find((pod) => pod.name === name);
-        if (!p) {
-          output = `Error from server (NotFound): pods "${name}" not found`;
-        } else if (isWide) {
-          output = `NAME                        READY   STATUS    RESTARTS   AGE   IP            NODE            NOMINATED NODE   READINESS GATES\n${cell(p.name, 27)} 1/1     ${cell(p.status, 9, "Running")} ${cell(p.restarts, 10, "0")} ${cell(p.age || "5s", 5)} ${cell(p.ip || "10.244.1.5", 13)} ${cell(p.node || "worker-node-1", 15)} <none>           <none>`;
-        } else {
-          output = `NAME                        READY   STATUS    RESTARTS   AGE\n${cell(p.name, 27)} 1/1     ${cell(p.status, 9, "Running")} ${cell(p.restarts, 10, "0")} ${p.age || "5s"}`;
-        }
-      } else {
-        if (filteredPods.length === 0) {
-          output = `No resources found in ${targetNs || "default"} namespace.`;
-        } else if (isWide) {
-          const header = `NAME                        READY   STATUS    RESTARTS   AGE   IP            NODE            NOMINATED NODE   READINESS GATES`;
-          const rows = filteredPods.map(
-            (p) => `${cell(p.name, 27)} 1/1     ${cell(p.status, 9, "Running")} ${cell(p.restarts, 10, "0")} ${cell(p.age || "5s", 5)} ${cell(p.ip || "10.244.1.5", 13)} ${cell(p.node || "worker-node-1", 15)} <none>           <none>`
-          );
-          output = [header, ...rows].join("\n");
-        } else {
-          const header = `NAME                        READY   STATUS    RESTARTS   AGE`;
-          const rows = filteredPods.map(
-            (p) => `${cell(p.name, 27)} 1/1     ${cell(p.status, 9, "Running")} ${cell(p.restarts, 10, "0")} ${p.age || "5s"}`
-          );
-          output = [header, ...rows].join("\n");
-        }
-      }
-      summary = `Queried live Pod status and IP/node assignments from etcd.`;
-    } else if (resource === "replicaset" || resource === "rs") {
-      if (nextState.replicaSets.length === 0) {
-        output = `No resources found in default namespace.`;
-      } else {
-        const header = `NAME                   DESIRED   CURRENT   READY   AGE`;
-        const rows = nextState.replicaSets.map(
-          (rs) => `${cell(rs.name, 22)} ${cell(rs.desiredReplicas ?? rs.replicas, 9, "0")} ${cell(rs.currentReplicas ?? rs.replicas, 9, "0")} ${cell(rs.readyReplicas ?? rs.replicas, 7, "0")} ${rs.age || "-"}`
-        );
-        output = [header, ...rows].join("\n");
-      }
-      summary = `Queried ReplicaSet controllers from etcd.`;
-    } else if (resource === "deployment" || resource === "deploy") {
-      if (nextState.deployments.length === 0) {
-        output = `No resources found in default namespace.`;
-      } else {
-        const header = `NAME         READY   UP-TO-DATE   AVAILABLE   AGE`;
-        const rows = nextState.deployments.map(
-          (d) => `${cell(d.name, 12)} ${d.available ?? 0}/${d.replicas ?? 0}     ${cell(d.upToDate, 12, "0")} ${cell(d.available, 11, "0")} ${d.age || "-"}`
-        );
-        output = [header, ...rows].join("\n");
-      }
-      summary = `Queried Deployment objects and rollout status from etcd.`;
-    } else if (resource === "daemonset" || resource === "ds") {
-      if (nextState.daemonSets.length === 0) {
-        output = `No resources found in default namespace.`;
-      } else {
-        const header = `NAME                   DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR   AGE`;
-        const rows = nextState.daemonSets.map(
-          (ds) => `${cell(ds.name, 22)} ${cell(ds.desiredNodes, 9, "0")} ${cell(ds.currentPods, 9, "0")} ${cell(ds.readyPods, 7, "0")} ${cell(ds.currentPods, 12, "0")} ${cell(ds.readyPods, 11, "0")} <none>          ${ds.age || "-"}`
-        );
-        output = [header, ...rows].join("\n");
-      }
-      summary = `Queried DaemonSet controller objects from etcd.`;
-    } else if (resource === "statefulset" || resource === "sts") {
-      if (nextState.statefulSets.length === 0) {
-        output = `No resources found in default namespace.`;
-      } else {
-        const header = `NAME         READY   AGE`;
-        const rows = nextState.statefulSets.map(
-          (sts) => `${cell(sts.name, 12)} ${sts.readyReplicas ?? 0}/${sts.replicas ?? 0}     ${sts.age || "-"}`
-        );
-        output = [header, ...rows].join("\n");
-      }
-      summary = `Queried StatefulSet controllers from etcd.`;
-    } else if (resource === "job") {
-      if (nextState.jobs.length === 0) {
-        output = `No resources found in default namespace.`;
-      } else {
-        const header = `NAME         COMPLETIONS   DURATION   AGE`;
-        const rows = nextState.jobs.map(
-          (job) => `${cell(job.name, 12)} ${job.succeeded ?? 0}/${job.completions ?? 0}           12s        ${job.age || "-"}`
-        );
-        output = [header, ...rows].join("\n");
-      }
-      summary = `Queried batch Job completion objects from etcd.`;
-    } else if (resource === "cronjob" || resource === "cj") {
-      if (nextState.cronJobs.length === 0) {
-        output = `No resources found in default namespace.`;
-      } else {
-        const header = `NAME         SCHEDULE      SUSPEND   ACTIVE   LAST SCHEDULE   AGE`;
-        const rows = nextState.cronJobs.map(
-          (cj) => `${cell(cj.name, 12)} ${cell(cj.schedule, 13)} False     ${cell(cj.active, 8, "0")} ${cell(cj.lastSchedule, 15)} ${cj.age || "-"}`
-        );
-        output = [header, ...rows].join("\n");
-      }
-      summary = `Queried CronJob schedules from etcd.`;
-    } else if (resource === "service" || resource === "svc") {
-      if (nextState.services.length === 0) {
-        output = `No resources found in default namespace.`;
-      } else {
-        const header = `NAME         TYPE           CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE`;
-        const rows = nextState.services.map(
-          (svc) => `${cell(svc.name, 12)} ${cell(svc.type, 14)} ${cell(svc.clusterIP, 15)} ${svc.externalIP || "<none>        "} ${cell(formatServicePorts(svc.ports), 9)} ${svc.age || "-"}`
-        );
-        output = [header, ...rows].join("\n");
-      }
-      summary = `Queried Service networking definitions from etcd.`;
-    } else if (resource === "namespace" || resource === "ns") {
-      if (nextState.namespaces.length === 0) {
-        output = `NAME              STATUS   AGE\ndefault           Active   10d\nkube-system       Active   10d\nkube-public       Active   10d`;
-      } else {
-        const header = `NAME              STATUS   AGE`;
-        const rows = nextState.namespaces.map(
-          (ns) => `${cell(ns.name, 17)} ${cell(ns.status, 8, "Active")} ${ns.age || "-"}`
-        );
-        output = [header, ...rows].join("\n");
-      }
-      summary = `Queried Namespace isolation partitions from etcd.`;
-    } else if (resource === "configmap" || resource === "cm") {
-      if (nextState.configMaps.length === 0) {
-        output = `No resources found in default namespace.`;
-      } else {
-        const header = `NAME         DATA   AGE`;
-        const rows = nextState.configMaps.map(
-          (cm) => `${cell(cm.name, 12)} ${cell(Object.keys(cm.data || {}).length, 6, "0")} ${cm.age || "-"}`
-        );
-        output = [header, ...rows].join("\n");
-      }
-      summary = `Queried ConfigMaps configuration objects from etcd.`;
-    } else if (resource === "secret") {
-      if (nextState.secrets.length === 0) {
-        output = `No resources found in default namespace.`;
-      } else {
-        const header = `NAME         TYPE                                  DATA   AGE`;
-        const rows = nextState.secrets.map(
-          (sec) => `${cell(sec.name, 12)} ${cell(sec.type, 37)} ${cell((sec.dataKeys || Object.keys(sec.data || {})).length, 6, "0")} ${sec.age || "-"}`
-        );
-        output = [header, ...rows].join("\n");
-      }
-      summary = `Queried Secret security credentials from etcd.`;
-    } else if (resource === "all") {
-      const parts: string[] = [];
-      if (nextState.pods.length > 0) {
-        parts.push(`NAME                        READY   STATUS    RESTARTS   AGE\n` + nextState.pods.map((p) => `pod/${cell(p.name, 23)} 1/1     ${cell(p.status, 9, "Running")} ${cell(p.restarts, 10, "0")} ${p.age || "5s"}`).join("\n"));
-      }
-      if (nextState.services.length > 0) {
-        parts.push(`NAME                 TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE\n` + nextState.services.map((s) => `service/${cell(s.name, 10)} ${cell(s.type, 11)} ${cell(s.clusterIP, 12)} <none>        ${cell(formatServicePorts(s.ports), 9)} ${s.age || "5s"}`).join("\n"));
-      }
-      if (nextState.deployments.length > 0) {
-        parts.push(`NAME                     READY   UP-TO-DATE   AVAILABLE   AGE\n` + nextState.deployments.map((d) => `deployment.apps/${cell(d.name, 8)} ${d.available ?? 0}/${d.replicas ?? 0}     ${cell(d.upToDate, 12, "0")} ${cell(d.available, 11, "0")} ${d.age || "-"}`).join("\n"));
-      }
-      if (nextState.replicaSets.length > 0) {
-        parts.push(`NAME                                DESIRED   CURRENT   READY   AGE\n` + nextState.replicaSets.map((rs) => `replicaset.apps/${cell(rs.name, 19)} ${cell(rs.desiredReplicas ?? rs.replicas, 9, "0")} ${cell(rs.currentReplicas ?? rs.replicas, 9, "0")} ${cell(rs.readyReplicas ?? rs.replicas, 7, "0")} ${rs.age || "-"}`).join("\n"));
-      }
-      output = parts.length > 0 ? parts.join("\n\n") : "No resources found in default namespace.";
-      summary = `Queried all default namespace workloads from etcd.`;
-    } else {
-      output = `error: the server doesn't have a resource type "${resource || args[0]}"`;
-      summary = `Resource type not found.`;
-    }
-
-    controlPlaneEvents = [
-      `kube-apiserver: Received authenticated GET request for ${resource || "resources"}.`,
-      `etcd: Retrieved current state definitions directly from database indexes.`,
-    ];
-    dataPlaneEvents = [`Data plane nodes remain unperturbed during read-only cluster queries.`];
-    componentFlow = ["Terminal", "kube-apiserver", "etcd"];
-    actionDescription = `API Server queried the current desired and live state directly from etcd key-value store.`;
-  }
-
-  // 4. DESCRIBE
-  else if (verb === "describe") {
-    if (resource === "node" || resource === "nodes") {
-      const nodeName = name || "worker-node-1";
-      const targetNode = nextState.nodes.find((n) => n.name === nodeName) || nextState.nodes[1] || nextState.nodes[0];
-      const nodePods = nextState.pods.filter((p) => p.node === targetNode.name && p.status !== "Terminating");
-
-      const podRows = nodePods.length > 0
-        ? nodePods.map((p) => `  default      ${cell(p.name, 28)} 100m (2%)     128Mi (1%)`).join("\n")
-        : "  (none)";
-
-      output = `Name:               ${targetNode.name}
-Roles:              ${targetNode.roles.join(",")}
-Labels:             beta.kubernetes.io/arch=amd64
-                    beta.kubernetes.io/os=linux
-                    kubernetes.io/arch=amd64
-                    kubernetes.io/hostname=${targetNode.name}
-                    kubernetes.io/os=linux
-Annotations:        kubeadm.alpha.kubernetes.io/cri-socket: unix:///run/containerd/containerd.sock
-                    node.alpha.kubernetes.io/ttl: 0
-CreationTimestamp:  Mon, 18 Aug 2026 09:00:00 +0000
-Taints:             ${targetNode.roles.includes("control-plane") ? "node-role.kubernetes.io/control-plane:NoSchedule" : "<none>"}
-Status:             ${targetNode.status}
-Addresses:
-  InternalIP:   ${targetNode.ip}
-  Hostname:     ${targetNode.name}
-Capacity:
-  cpu:                4
-  ephemeral-storage:  100Gi
-  memory:             8192Mi
-  pods:               110
-Allocatable:
-  cpu:                4
-  ephemeral-storage:  100Gi
-  memory:             8192Mi
-  pods:               110
-Non-terminated Pods:  (${nodePods.length} in total)
-  Namespace    Name                         CPU Requests  Memory Requests
-  ---------    ----                         ------------  ---------------
-${podRows}
-Allocated resources:
-  Resource           Requests    Limits
-  --------           --------    ------
-  cpu                ${nodePods.length * 100}m (${nodePods.length * 2}%)   ${nodePods.length * 200}m (${nodePods.length * 4}%)
-  memory             ${nodePods.length * 128}Mi (${Math.round(nodePods.length * 1.5)}%)  ${nodePods.length * 256}Mi (${nodePods.length * 3}%)
-Events:
-  Type    Reason                   Age   From        Message
-  ----    ------                   ----  ----        -------
-  Normal  Starting                 10d   kubelet     Starting kubelet.
-  Normal  NodeHasSufficientMemory  10d   kubelet     Node ${targetNode.name} status is now: NodeHasSufficientMemory
-  Normal  NodeReady                10d   kubelet     Node ${targetNode.name} status is now: NodeReady`;
-
-      summary = `Inspected node telemetry, allocatable capacities, running container workloads, and kubelet conditions for '${targetNode.name}'.`;
-      controlPlaneEvents = [`kube-apiserver: Aggregated node metadata, health status heartbeats, and bound Pod allocations from etcd.`];
-      dataPlaneEvents = [`kubelet (${targetNode.name}): Reported real-time node resource telemetry and hardware metrics to the API server.`];
-      componentFlow = ["Terminal", "kube-apiserver", "etcd", "kubelet"];
-      actionDescription = `API Server aggregated Node object metadata, resource allocations, and kubelet conditions.`;
-    } else if (resource === "pod" || resource === "pods") {
-      const p = nextState.pods.find((pod) => pod.name === name) || nextState.pods[0];
-      if (!p) {
-        output = `Error from server (NotFound): pods "${name || ""}" not found`;
-      } else {
-        const podNode = p.node || "worker-node-1";
-        const podIp = p.ip || "10.244.1.5";
-        output = `Name:         ${p.name}
-Namespace:    ${p.namespace || "default"}
-Priority:     0
-Node:         ${podNode}/172.18.0.3
-Status:       ${p.status}
-IP:           ${podIp}
-Containers:
-  nginx:
-    Container ID:   containerd://simulated-${p.name}
-    Image:          ${p.image}
-    Port:           80/TCP
-    State:          Running
-Events:
-  Type    Reason     Age   From               Message
-  ----    ------     ----  ----               -------
-  Normal  Scheduled  20s   default-scheduler  Successfully assigned default/${p.name} to ${podNode}
-  Normal  Pulling    19s   kubelet            Pulling image "${p.image}"
-  Normal  Pulled     18s   kubelet            Successfully pulled image "${p.image}"
-  Normal  Created    18s   kubelet            Created container nginx
-  Normal  Started    18s   kubelet            Started container nginx`;
-      }
-      summary = `Inspected detailed Pod state, container runtimes, IP assignment, and chronological kubelet events for '${p?.name || name}'.`;
-      controlPlaneEvents = [`kube-apiserver: Fetched Pod manifest and aggregated cluster event objects from etcd.`];
-      dataPlaneEvents = [`kubelet: Event logs confirm healthy container lifecycle.`];
-      componentFlow = ["Terminal", "kube-apiserver", "etcd"];
-      actionDescription = `API Server aggregated Pod details, node bindings, and lifecycle events from etcd.`;
-    } else if (resource === "service" || resource === "svc") {
-      const svc = nextState.services.find((s) => s.name === name);
-      if (!svc) {
-        output = `Error from server (NotFound): services "${name}" not found`;
-      } else {
-        const selectors = svc.selector ? Object.entries(svc.selector).map(([k, v]) => `${k}=${v}`).join(",") : "<none>";
-        const { portNum, targetPort } = getServicePortInfo(svc.ports);
-        output = `Name:              ${svc.name}
-Namespace:         ${svc.namespace || "default"}
-Labels:            <none>
-Annotations:       <none>
-Selector:          ${selectors}
-Type:              ${svc.type}
-IP Family Policy:  SingleStack
-IP Families:       IPv4
-IP:                ${svc.clusterIP}
-IPs:               ${svc.clusterIP}
-Port:              <unset>  ${portNum}/TCP
-TargetPort:        ${targetPort}/TCP
-Endpoints:         10.244.1.10:80,10.244.2.11:80
-Session Affinity:  None
-Events:            <none>`;
-      }
-      summary = `Inspected Service routing configuration, ClusterIP, and dynamic Endpoints.`;
-      controlPlaneEvents = [`kube-apiserver: Retrieved Service object and matched EndpointSlice objects from etcd.`];
-      dataPlaneEvents = [`kube-proxy: Configures iptables DNAT rules matching these Endpoints.`];
-      componentFlow = ["Terminal", "kube-apiserver", "etcd"];
-      actionDescription = `API Server inspected Service definitions and endpoint mappings.`;
-    } else {
-      output = `describe ${resource} ${name || ""} (simulated detail view)`;
-      summary = `Inspected ${resource} details.`;
-      controlPlaneEvents = [`kube-apiserver queried etcd for resource details.`];
-      dataPlaneEvents = [`No data plane changes.`];
-      componentFlow = ["Terminal", "kube-apiserver", "etcd"];
-      actionDescription = `API Server queried resource description from etcd.`;
-    }
-  }
-
-  // 5. DELETE
-  else if (verb === "delete") {
-    if (resource === "pod" || resource === "pods") {
-      const targetPod = name
-        ? nextState.pods.find((p) => p.name === name)
-        : nextState.pods[0];
-
-      if (!targetPod) {
-        output = `Error from server (NotFound): pods "${name || ""}" not found`;
-        summary = `Pod '${name || ""}' not found for deletion.`;
-        controlPlaneEvents = [`kube-apiserver: Could not locate Pod in etcd.`];
-        dataPlaneEvents = [`No data plane changes.`];
-      } else {
-        nextState.pods = nextState.pods.filter((p) => p.name !== targetPod.name);
-        output = `pod "${targetPod.name}" deleted`;
-        affectedPods.push(targetPod.name);
-        if (targetPod.node) affectedNodes.push(targetPod.node);
-
-        // Check if Pod belonged to a ReplicaSet (self-healing reconciliation loop)
-        if (targetPod.ownerRef && targetPod.ownerRef.kind === "ReplicaSet") {
-          const parentRs = nextState.replicaSets.find(
-            (rs) => rs.name === targetPod.ownerRef?.name
-          );
-          if (parentRs) {
-            const randomSuffix = Math.random().toString(36).substring(2, 7);
-            const newNode = schedulePodToNode(nextState.pods, nextState.nodes);
-            const recreatedPod: Pod = {
-              name: `${parentRs.name}-${randomSuffix}`,
-              image: parentRs.image,
-              status: "Running",
-              node: newNode,
-              ip: getPodIpForNode(newNode),
-              restarts: 0,
-              ownerRef: { kind: "ReplicaSet", name: parentRs.name },
-              age: "1s",
-              namespace: parentRs.namespace,
-            };
-            nextState.pods.push(recreatedPod);
-            affectedPods.push(recreatedPod.name);
-            if (!affectedNodes.includes(newNode)) affectedNodes.push(newNode);
-
-            summary = `Pod '${targetPod.name}' was terminated. Because it is owned by ReplicaSet '${parentRs.name}', the ReplicaSet Controller immediately detected the missing replica (Reconciliation Loop) and spawned self-healing replacement '${recreatedPod.name}' on ${newNode}!`;
-            controlPlaneEvents = [
-              `kube-apiserver: Marked Pod '${targetPod.name}' for deletion in etcd.`,
-              `kube-controller-manager (ReplicaSet Controller): Observed Actual Pods < Desired Replicas.`,
-              `kube-controller-manager: Triggered self-healing loop and created replacement Pod '${recreatedPod.name}'.`,
-              `kube-scheduler: Selected ${newNode} for replacement Pod.`,
-            ];
-            dataPlaneEvents = [
-              `kubelet (${targetPod.node}): Sent SIGTERM signal to old container, released cgroups & network interface.`,
-              `kubelet (${newNode}): Received replacement PodSpec and instructed containerd CRI to launch container.`,
-            ];
-            componentFlow = ["Terminal", "kube-apiserver", "etcd", "kube-controller-manager", "kube-scheduler", "kubelet", "CRI"];
-            actionDescription = `Pod '${targetPod.name}' deleted → kubelet stopped container → ReplicaSet Controller triggered self-healing & created replacement '${recreatedPod.name}' on ${newNode}.`;
-          }
-        } else {
-          summary = `Deleted standalone Pod '${targetPod.name}'. Because it has no controlling ReplicaSet/Deployment, it has permanently ceased to exist.`;
-          controlPlaneEvents = [`kube-apiserver: Removed Pod '${targetPod.name}' record from etcd.`];
-          dataPlaneEvents = [`kubelet (${targetPod.node}): Stopped container process, destroyed Linux namespaces, and returned IP to IPAM pool.`];
-          componentFlow = ["Terminal", "kube-apiserver", "etcd", "kubelet", "CRI"];
-          actionDescription = `API Server recorded deletion in etcd → kubelet stopped & cleaned up container → no controller exists to replace it.`;
-        }
-        nextState.nodes = syncNodes(nextState.nodes, nextState.pods);
-      }
-    } else if (resource === "deployment" || resource === "deploy") {
-      const dep = nextState.deployments.find((d) => d.name === name);
-      if (!dep) {
-        output = `Error from server (NotFound): deployments.apps "${name}" not found`;
-      } else {
-        nextState.deployments = nextState.deployments.filter((d) => d.name !== name);
-        nextState.replicaSets = nextState.replicaSets.filter((rs) => !rs.name.startsWith(dep.name) && rs.ownerRef?.name !== dep.name);
-        nextState.pods = nextState.pods.filter((p) => !p.name.startsWith(dep.name) && p.ownerRef?.name !== dep.name);
-        output = `deployment.apps "${dep.name}" deleted`;
-        nextState.nodes = syncNodes(nextState.nodes, nextState.pods);
-        summary = `Deleted Deployment '${dep.name}' and cascaded deletion to its managed ReplicaSets and Pods.`;
-        controlPlaneEvents = [
-          `kube-apiserver: Recorded deletion of Deployment '${dep.name}'.`,
-          `kube-controller-manager: Cascaded deletion to child ReplicaSets and Pods.`,
-        ];
-        dataPlaneEvents = [`kubelets across worker nodes terminated all child containers.`];
-        componentFlow = ["Terminal", "kube-apiserver", "etcd", "kube-controller-manager", "kubelet"];
-        actionDescription = `Deployment '${dep.name}' deleted → Controller cascaded deletion to ReplicaSets & Pods → kubelets cleaned up containers.`;
-      }
-    } else if (resource === "replicaset" || resource === "rs") {
-      const rs = nextState.replicaSets.find((r) => r.name === name);
-      if (!rs) {
-        output = `Error from server (NotFound): replicasets.apps "${name}" not found`;
-      } else {
-        nextState.replicaSets = nextState.replicaSets.filter((r) => r.name !== name);
-        nextState.pods = nextState.pods.filter((p) => p.ownerRef?.name !== rs.name);
-        output = `replicaset.apps "${rs.name}" deleted`;
-        nextState.nodes = syncNodes(nextState.nodes, nextState.pods);
-        summary = `Deleted ReplicaSet '${rs.name}' and cascaded deletion to all its Pods.`;
-        controlPlaneEvents = [`kube-apiserver: Deleted ReplicaSet '${rs.name}' from etcd.`];
-        dataPlaneEvents = [`kubelet stopped all child container processes.`];
-        componentFlow = ["Terminal", "kube-apiserver", "etcd", "kubelet"];
-        actionDescription = `ReplicaSet '${rs.name}' deleted → kubelet terminated child Pods.`;
-      }
-    } else if (resource === "service" || resource === "svc") {
-      nextState.services = nextState.services.filter((s) => s.name !== name);
-      output = `service "${name}" deleted`;
-      summary = `Deleted Service '${name}' and tore down virtual ClusterIP routing.`;
-      controlPlaneEvents = [`kube-apiserver: Deleted Service '${name}' from etcd.`];
-      dataPlaneEvents = [`kube-proxy: Flushed iptables/IPVS routing chains for Service ClusterIP.`];
-      componentFlow = ["Terminal", "kube-apiserver", "etcd", "kube-proxy"];
-      actionDescription = `Service '${name}' deleted → kube-proxy flushed iptables rules.`;
-    } else {
-      output = `error: resource type "${resource}" not deletable in this simulated environment`;
-      summary = `Resource deletion attempted.`;
-    }
-  }
-
-  // 6. SCALE
-  else if (verb === "scale") {
-    const replicasFlag = flags.replicas ? parseInt(String(flags.replicas), 10) : 3;
-    if (resource === "replicaset" || resource === "rs") {
-      const rs = nextState.replicaSets.find((r) => r.name === name);
-      if (!rs) {
-        output = `Error from server (NotFound): replicasets.apps "${name}" not found`;
-      } else {
-        const oldReplicas = rs.desiredReplicas ?? rs.replicas ?? 1;
-        rs.desiredReplicas = replicasFlag;
-        rs.currentReplicas = replicasFlag;
-        rs.readyReplicas = replicasFlag;
-
-        const rsPods = nextState.pods.filter((p) => p.ownerRef?.name === rs.name);
-        if (rsPods.length < replicasFlag) {
-          const toAdd = replicasFlag - rsPods.length;
-          for (let i = 0; i < toAdd; i++) {
-            const node = schedulePodToNode(nextState.pods, nextState.nodes);
-            const pName = `${rs.name}-${Math.random().toString(36).substring(2, 7)}`;
-            nextState.pods.push({
-              name: pName,
-              image: rs.image,
-              status: "Running",
-              node,
-              ip: getPodIpForNode(node),
-              restarts: 0,
-              ownerRef: { kind: "ReplicaSet", name: rs.name },
-              age: "2s",
-              namespace: rs.namespace,
-            });
-            affectedPods.push(pName);
-            if (!affectedNodes.includes(node)) affectedNodes.push(node);
-          }
-        } else if (rsPods.length > replicasFlag) {
-          const toRemove = rsPods.length - replicasFlag;
-          const keepNames = rsPods.slice(0, rsPods.length - toRemove).map((p) => p.name);
-          nextState.pods = nextState.pods.filter(
-            (p) => p.ownerRef?.name !== rs.name || keepNames.includes(p.name)
-          );
-        }
-        nextState.nodes = syncNodes(nextState.nodes, nextState.pods);
-        output = `replicaset.apps/${rs.name} scaled`;
-
-        summary = `Scaled ReplicaSet '${rs.name}' from ${oldReplicas} to ${replicasFlag} replicas. The ReplicaSet controller detected the replica drift and scheduled new Pods across worker nodes.`;
-        controlPlaneEvents = [
-          `kube-apiserver: Updated desiredReplicas = ${replicasFlag} in etcd.`,
-          `kube-controller-manager (ReplicaSet Controller): Detected delta and adjusted active Pod count.`,
-          `kube-scheduler: Balanced pod placements between worker-node-1 and worker-node-2.`,
-        ];
-        dataPlaneEvents = [
-          `kubelets on worker nodes spawned container runtimes and registered healthy statuses.`,
-          `kube-proxy: Updated endpoint pools to include new Pod IPs.`,
-        ];
-        componentFlow = ["Terminal", "kube-apiserver", "etcd", "kube-controller-manager", "kube-scheduler", "kubelet"];
-        actionDescription = `API Server updated desired replicas in etcd → Controller Manager reconciled replica drift → Scheduler distributed pods across worker nodes.`;
-      }
-    } else if (resource === "deployment" || resource === "deploy") {
-      const dep = nextState.deployments.find((d) => d.name === name);
-      if (!dep) {
-        output = `Error from server (NotFound): deployments.apps "${name}" not found`;
-      } else {
-        dep.replicas = replicasFlag;
-        dep.available = replicasFlag;
-        dep.upToDate = replicasFlag;
-
-        const activeRs = nextState.replicaSets.find((rs) => rs.ownerRef?.name === dep.name) || nextState.replicaSets[0];
-        if (activeRs) {
-          activeRs.desiredReplicas = replicasFlag;
-          activeRs.currentReplicas = replicasFlag;
-          activeRs.readyReplicas = replicasFlag;
-
-          const currentPods = nextState.pods.filter((p) => p.ownerRef?.name === activeRs.name || p.name.startsWith(dep.name));
-          if (currentPods.length < replicasFlag) {
-            const toAdd = replicasFlag - currentPods.length;
-            for (let i = 0; i < toAdd; i++) {
-              const node = schedulePodToNode(nextState.pods, nextState.nodes);
-              const pName = `${dep.name}-${Math.random().toString(36).substring(2, 7)}`;
-              nextState.pods.push({
-                name: pName,
-                image: dep.image,
-                status: "Running",
-                node,
-                ip: getPodIpForNode(node),
-                restarts: 0,
-                ownerRef: { kind: "ReplicaSet", name: activeRs.name },
-                age: "2s",
-                namespace: dep.namespace,
-              });
-              affectedPods.push(pName);
-              if (!affectedNodes.includes(node)) affectedNodes.push(node);
-            }
-          }
-        }
-        nextState.nodes = syncNodes(nextState.nodes, nextState.pods);
-        output = `deployment.apps/${dep.name} scaled`;
-
-        summary = `Scaled Deployment '${dep.name}' to ${replicasFlag} replicas. Deployment Controller scaled the underlying ReplicaSet and orchestrated balanced Pod distribution across worker nodes.`;
-        controlPlaneEvents = [
-          `kube-apiserver: Updated Deployment desired replicas in etcd.`,
-          `kube-controller-manager: Deployment Controller instructed active ReplicaSet to scale.`,
-          `kube-scheduler: Placed new Pod replicas across worker-node-1 and worker-node-2.`,
-        ];
-        dataPlaneEvents = [`Worker node kubelets launched new container sandboxes.`];
-        componentFlow = ["Terminal", "kube-apiserver", "etcd", "kube-controller-manager", "kube-scheduler", "kubelet"];
-        actionDescription = `Deployment Controller updated ReplicaSet desired replicas → Scheduler placed pods across worker nodes.`;
-      }
-    }
-  }
-
-  // 7. SET IMAGE
-  else if (verb === "set" && (args[0] === "image" || resource === "deployment")) {
-    const dep = nextState.deployments.find((d) => d.name === (name || "my-app"));
-    if (!dep) {
-      output = `Error from server (NotFound): deployments.apps "${name || "my-app"}" not found`;
-    } else {
-      const imageSpec = args.find((a) => a.includes("="));
-      const newImage = imageSpec ? imageSpec.split("=")[1] : "nginx:1.19";
-      dep.image = newImage;
-      dep.revision += 1;
-
-      const oldRsName = `${dep.name}-v${dep.revision - 1}`;
-      const newRsName = `${dep.name}-v${dep.revision}`;
-
-      const existingOldRs = nextState.replicaSets.find((r) => r.name.startsWith(dep.name));
-      if (existingOldRs) {
-        existingOldRs.desiredReplicas = 0;
-        existingOldRs.currentReplicas = 0;
-        existingOldRs.readyReplicas = 0;
-      }
-
-      const newRs: ReplicaSet = {
-        name: newRsName,
-        desiredReplicas: dep.replicas,
-        currentReplicas: dep.replicas,
-        readyReplicas: dep.replicas,
-        image: newImage,
-        ownerRef: { kind: "Deployment", name: dep.name },
-        age: "1s",
-        namespace: dep.namespace,
-      };
-      nextState.replicaSets.push(newRs);
-
-      nextState.pods = nextState.pods.filter((p) => p.ownerRef?.kind !== "Deployment" && !p.name.startsWith(dep.name));
-      for (let i = 0; i < dep.replicas; i++) {
-        const node = schedulePodToNode(nextState.pods, nextState.nodes);
-        const pName = `${newRsName}-${Math.random().toString(36).substring(2, 7)}`;
-        nextState.pods.push({
-          name: pName,
-          image: newImage,
-          status: "Running",
-          node,
-          ip: getPodIpForNode(node),
-          restarts: 0,
-          ownerRef: { kind: "ReplicaSet", name: newRsName },
-          age: "1s",
-          namespace: dep.namespace,
-        });
-        affectedPods.push(pName);
-        if (!affectedNodes.includes(node)) affectedNodes.push(node);
-      }
-
-      nextState.nodes = syncNodes(nextState.nodes, nextState.pods);
-      output = `deployment.apps/${dep.name} image updated`;
-
-      summary = `Initiated Rolling Update on Deployment '${dep.name}' with new image '${newImage}'. Created new ReplicaSet '${newRsName}', progressively scheduled updated Pods, and scaled down '${oldRsName}'.`;
-      controlPlaneEvents = [
-        `kube-apiserver: Received image update and persisted Revision ${dep.revision} in etcd.`,
-        `kube-controller-manager: Created new ReplicaSet '${newRsName}' with updated PodTemplate.`,
-        `kube-controller-manager: Coordinated rolling update (maxSurge / maxUnavailable).`,
-        `kube-scheduler: Distributed new Pods evenly between worker-node-1 and worker-node-2.`,
-      ];
-      dataPlaneEvents = [
-        `kubelets pulled new image '${newImage}' and started updated container sandboxes.`,
-        `kube-proxy: Dynamic Endpoints shifted traffic seamlessly with zero downtime.`,
-      ];
-      componentFlow = ["Terminal", "kube-apiserver", "etcd", "kube-controller-manager", "kube-scheduler", "kubelet"];
-      actionDescription = `Deployment Controller created new ReplicaSet with updated image template → performed rolling update by orchestrating pod lifecycles.`;
-    }
-  }
-
-  // 8. ROLLOUT
-  else if (verb === "rollout") {
-    const dep = nextState.deployments.find((d) => d.name === (name || "my-app"));
-    if (!dep) {
-      output = `Error from server (NotFound): deployments.apps "${name || "my-app"}" not found`;
-    } else if (subVerb === "status") {
-      summary = `Checked rollout progress for Deployment '${dep.name}'.`;
-      controlPlaneEvents = [`kube-apiserver: Read live replica statuses from Deployment controller in etcd.`];
-      dataPlaneEvents = [`All worker pods are passing readiness probes.`];
-      componentFlow = ["Terminal", "kube-apiserver", "etcd"];
-      actionDescription = `Deployment Controller reported all ${dep.replicas} replicas available and ready.`;
-    } else if (subVerb === "history") {
-      output = `deployment.apps/${dep.name} \nREVISION  CHANGE-CAUSE\n1         <none>\n2         <none>`;
-      summary = `Retrieved revision history for Deployment '${dep.name}'.`;
-      controlPlaneEvents = [`kube-apiserver: Retrieved ReplicaSet generation history from etcd.`];
-      dataPlaneEvents = [`No data plane changes.`];
-      componentFlow = ["Terminal", "kube-apiserver", "etcd"];
-      actionDescription = `API Server fetched ReplicaSet revision histories.`;
-    } else if (subVerb === "undo") {
-      dep.revision += 1;
-      dep.image = "nginx:latest";
-      nextState.replicaSets.forEach((rs) => {
-        if (rs.name.includes("v2") || rs.image !== "nginx:latest") {
-          rs.desiredReplicas = 0;
-          rs.currentReplicas = 0;
-          rs.readyReplicas = 0;
-        } else {
-          rs.desiredReplicas = dep.replicas;
-          rs.currentReplicas = dep.replicas;
-          rs.readyReplicas = dep.replicas;
-        }
-      });
-      nextState.pods = [];
-      for (let i = 0; i < dep.replicas; i++) {
-        const node = schedulePodToNode(nextState.pods, nextState.nodes);
-        const pName = `${dep.name}-v1-${Math.random().toString(36).substring(2, 7)}`;
-        nextState.pods.push({
-          name: pName,
-          image: "nginx:latest",
-          status: "Running",
-          node,
-          ip: getPodIpForNode(node),
-          restarts: 0,
-          ownerRef: { kind: "ReplicaSet", name: `${dep.name}-v1` },
-          age: "2s",
-          namespace: dep.namespace,
-        });
-        affectedPods.push(pName);
-        if (!affectedNodes.includes(node)) affectedNodes.push(node);
-      }
-      nextState.nodes = syncNodes(nextState.nodes, nextState.pods);
-      output = `deployment.apps/${dep.name} rolled back`;
-
-      summary = `Rolled back Deployment '${dep.name}' to the previous stable revision. Scaled up old stable ReplicaSet and retired broken revision with zero application downtime.`;
-      controlPlaneEvents = [
-        `kube-apiserver: Updated Deployment active revision in etcd.`,
-        `kube-controller-manager: Scaled stable ReplicaSet '${dep.name}-v1' back to ${dep.replicas} replicas.`,
-        `kube-scheduler: Re-scheduled restored Pods across worker nodes.`,
-      ];
-      dataPlaneEvents = [`kubelets launched previous container image and kube-proxy redirected traffic.`];
-      componentFlow = ["Terminal", "kube-apiserver", "etcd", "kube-controller-manager", "kubelet"];
-      actionDescription = `Deployment Controller read revision history from etcd → restored previous ReplicaSet template → reconciled pod counts.`;
-    }
-  }
-
-  // 9. LOGS
-  else if (verb === "logs") {
-    const p = nextState.pods.find((pod) => pod.name === name) || nextState.pods[0];
-    if (!p) {
-      output = `Error from server (NotFound): pods "${name}" not found`;
-    } else {
-      output = `[simulated stdout logs for pod/${p.name} on ${p.node || "worker-node-1"}]
-2026/08/28 12:00:00 [notice] 1#1: using the "epoll" event method
-2026/08/28 12:00:00 [notice] 1#1: nginx/1.25.2
-2026/08/28 12:00:00 [notice] 1#1: start worker processes
-2026/08/28 12:05:00 [info] 28#28: *1 GET / HTTP/1.1" 200 615 "-" "kube-probe/1.28"
-2026/08/28 12:05:15 [info] 28#28: *2 GET /healthz HTTP/1.1" 200 2 "-" "kube-probe/1.28"`;
-    }
-    summary = `Retrieved container stdout/stderr log stream for Pod '${p?.name || name}'.`;
-    controlPlaneEvents = [`kube-apiserver: Proxied streaming request to worker node kubelet on port 10250.`];
-    dataPlaneEvents = [`kubelet: Read container log files from /var/log/pods/ on host filesystem and streamed back to API server.`];
-    componentFlow = ["Terminal", "kube-apiserver", "kubelet", "CRI"];
-    actionDescription = `API Server opened streaming connection to kubelet on worker node → kubelet retrieved stdout/stderr logs directly from CRI container runtime.`;
-  }
-
-  // 10. EVENTS
-  else if (verb === "events") {
-    output = `LAST SEEN   TYPE      REASON      OBJECT               MESSAGE
-12s         Normal    Scheduled   pod/nginx            Successfully assigned default/nginx to worker-node-1
-11s         Normal    Pulling     pod/nginx            Pulling image "nginx:latest"
-10s         Normal    Pulled      pod/nginx            Successfully pulled image "nginx:latest"
-10s         Normal    Created     pod/nginx            Created container nginx
-9s          Normal    Started     pod/nginx            Started container nginx
-5s          Normal    ScalingReplicaSet deployment/app Scaled up replicaSet app-v1 to 3`;
-    summary = `Retrieved cluster lifecycle and controller event logs from etcd.`;
-    controlPlaneEvents = [`kube-apiserver: Queried chronological cluster Event objects from etcd.`];
-    dataPlaneEvents = [`Events reflect historical state changes generated by kubelet and controllers.`];
-    componentFlow = ["Terminal", "kube-apiserver", "etcd"];
-    actionDescription = `API Server retrieved recorded cluster lifecycle and controller events from etcd.`;
-  } else {
-    output = `unknown command: kubectl ${verb}`;
-    summary = `Unknown command 'kubectl ${verb}'.`;
-  }
-
-  // ActionImpact object
-  const actionImpact: ActionImpact = {
-    userAction: input,
-    summary,
-    controlPlaneEvents,
-    dataPlaneEvents,
-    affectedNodes: affectedNodes.length > 0 ? affectedNodes : ["control-plane"],
-    affectedPods,
-    timestamp: Date.now(),
-  };
-  nextState.lastActionImpact = actionImpact;
-
-  // Validate step completion
-  if (currentStep && currentStep.type === "challenge" && currentStep.expected) {
-    const exp = currentStep.expected;
-    if (exp.verb.toLowerCase() === verb.toLowerCase() || (exp.verb === "apply" && verb === "create")) {
-      if (!exp.resource || (resource && exp.resource.toLowerCase() === resource.toLowerCase()) || (verb === "apply" && file)) {
-        if (
-          !exp.name ||
-          (name && name.toLowerCase().includes(exp.name.toLowerCase())) ||
-          verb === "delete" ||
-          verb === "set" ||
-          verb === "rollout" ||
-          verb === "logs" ||
-          verb === "apply" ||
-          verb === "create"
-        ) {
-          matchedChallenge = true;
-        }
-      }
-    }
-  }
-
-  return {
-    output,
-    newState: nextState,
-    isCorrect: matchedChallenge,
-    componentFlow,
-    actionDescription,
-    actionImpact,
-  };
+  const pod = endpoints[state.clock % endpoints.length];
+  pod.logs.push(`10.244.0.1 - "GET ${path} HTTP/1.1" 200 ${pod.name}`);
+  return ok([
+    `HTTP/1.1 200 OK`,
+    `served by ${pod.name} (${pod.ip}) on ${pod.node} running ${pod.image}`,
+    `route: ${via ? `${via} -> ` : ""}service/${service.name} -> pod`,
+  ]);
 }
 
-function handleShellCommand(
-  input: string,
-  parsed: ParsedCommand,
+/* ------------------------------------------------------------------ */
+/* Dispatch                                                            */
+/* ------------------------------------------------------------------ */
+
+export function execute(
   state: ClusterState,
-  currentStep?: LessonStep
-): ExecutionResult {
-  let output = "";
-  let openVim: string | undefined;
-  const { verb, file, redirectToFile, args } = parsed;
-  const fileName = file || args[0];
+  parsed: ParsedCommand,
+  context: ExecContext = EMPTY_CONTEXT,
+): CommandResult {
+  if (!parsed.ok) return err(parsed.error ?? "invalid command");
 
-  const nextFiles = { ...state.files };
+  switch (parsed.verb) {
+    case "curl":
+      return curl(state, parsed.names[0] ?? "");
 
-  if (verb === "ls") {
-    const fileList = Object.keys(nextFiles);
-    output = fileList.length > 0 ? fileList.join("  ") : "(no files in workspace)";
-  } else if (verb === "cat") {
-    if (!fileName) {
-      output = `cat: missing operand`;
-    } else if (nextFiles[fileName] !== undefined) {
-      output = nextFiles[fileName].trimEnd();
-    } else {
-      output = `cat: ${fileName}: No such file or directory`;
+    case "cat": {
+      const file = context.files[parsed.names[0] ?? ""];
+      return file ? ok(file.raw.split("\n")) : err(`cat: ${parsed.names[0]}: No such file`);
     }
-  } else if (verb === "rm") {
-    if (!fileName) {
-      output = `rm: missing operand`;
-    } else if (nextFiles[fileName] !== undefined) {
-      delete nextFiles[fileName];
-      output = "";
-    } else {
-      output = `rm: cannot remove '${fileName}': No such file or directory`;
+
+    case "get":
+      switch (parsed.resource) {
+        case "pods":
+          return getPods(state, parsed);
+        case "replicasets":
+          return getReplicaSets(state, parsed);
+        case "deployments":
+          return getDeployments(state, parsed);
+        case "daemonsets":
+          return getDaemonSets(state);
+        case "statefulsets":
+          return getStatefulSets(state);
+        case "jobs":
+          return getJobs(state);
+        case "cronjobs":
+          return getCronJobs(state);
+        case "services":
+          return getServices(state);
+        case "endpoints":
+          return getEndpoints(state);
+        case "ingresses":
+          return getIngresses(state);
+        case "configmaps":
+          return getConfigMaps(state);
+        case "secrets":
+          return getSecrets(state);
+        case "storageclasses":
+          return getStorageClasses(state);
+        case "persistentvolumes":
+          return getPersistentVolumes(state);
+        case "persistentvolumeclaims":
+          return getPersistentVolumeClaims(state);
+        case "nodes":
+          return getNodes(state, parsed);
+        case "events":
+          return getEvents(state);
+        case "all":
+          return getAll(state, parsed);
+        default:
+          return err("specify a resource, e.g. `kubectl get pods`. Type `help` for the full list.");
+      }
+
+    case "describe": {
+      const name = parsed.names[0];
+      if (!name) return err("resource name is required");
+      switch (parsed.resource) {
+        case "pods":
+          return describePod(state, name);
+        case "deployments":
+          return describeDeployment(state, name);
+        case "services":
+          return describeService(state, name);
+        case "nodes":
+          return describeNode(state, name);
+        case "ingresses":
+          return describeIngress(state, name);
+        case "persistentvolumeclaims":
+          return describeClaim(state, name);
+        default: {
+          const result = describeSimple(state, parsed.resource ?? "", name);
+          return result ?? err(`describing ${parsed.resource} is not supported in this lab`);
+        }
+      }
     }
-  } else if (verb === "vim" || verb === "vi") {
-    if (!fileName) {
-      output = `~ [vim: new file] ~\n(Simulated editor: specify a file name to create or view)`;
-    } else if (nextFiles[fileName] !== undefined) {
-      openVim = fileName;
-      output = `~ [vim: ${fileName}] ~
-${nextFiles[fileName].trimEnd()}
-~
-~ (Simulated read-only vim view. File is stored in workspace virtual filesystem. Apply with 'kubectl apply -f ${fileName}')`;
-    } else {
-      openVim = fileName;
-      nextFiles[fileName] = `apiVersion: v1\nkind: Pod\nmetadata:\n  name: my-pod\nspec:\n  containers:\n  - name: my-container\n    image: nginx:latest\n`;
-      output = `~ [vim: ${fileName} [New File]] ~
-${nextFiles[fileName].trimEnd()}
-~
-~ (Simulated editor: created new template file '${fileName}' in virtual filesystem. Apply with 'kubectl apply -f ${fileName}')`;
-    }
-  } else if (verb === "touch") {
-    if (fileName && nextFiles[fileName] === undefined) {
-      nextFiles[fileName] = "";
-    }
-    output = "";
-  } else if (verb === "echo") {
-    const content = args.join(" ");
-    if (redirectToFile) {
-      nextFiles[redirectToFile] = content;
-      output = "";
-    } else {
-      output = content;
-    }
-  } else if (verb === "pwd") {
-    output = "/root";
+
+    case "run":
+      return runPod(state, parsed);
+
+    case "create":
+      return createResource(state, parsed);
+
+    case "apply":
+      return applyFile(state, parsed, context);
+
+    case "expose":
+      return expose(state, parsed);
+
+    case "delete":
+      return deleteResource(state, parsed);
+
+    case "scale":
+      return scale(state, parsed);
+
+    case "set":
+      if (parsed.subcommand !== "image") return err("only `kubectl set image` is supported");
+      return setImage(state, parsed);
+
+    case "rollout":
+      return rollout(state, parsed);
+
+    case "label":
+      return labelCommand(state, parsed);
+
+    case "taint":
+      return taintCommand(state, parsed);
+
+    case "logs":
+      return logs(state, parsed);
+
+    case "exec":
+      return execInPod(state, parsed);
+
+    case "explain":
+      return ok(["Type `help` to see every command this simulated cluster understands."]);
+
+    default:
+      return err(`verb "${parsed.verb}" is not implemented in this lab`);
   }
-
-  const nextState: ClusterState = {
-    ...state,
-    files: nextFiles,
-  };
-
-  const actionImpact: ActionImpact = {
-    userAction: input,
-    summary: `Executed local utility command '${verb}${fileName ? ` ${fileName}` : ""}' in the workspace shell environment.`,
-    controlPlaneEvents: [
-      `Local shell session executed command without issuing HTTP calls to the Kubernetes Control Plane.`,
-    ],
-    dataPlaneEvents: [
-      `Workspace local virtual filesystem updated.`,
-    ],
-    affectedNodes: [],
-    affectedPods: [],
-    timestamp: Date.now(),
-  };
-  nextState.lastActionImpact = actionImpact;
-
-  let matchedChallenge = false;
-  if (currentStep && currentStep.type === "challenge" && currentStep.expected) {
-    const exp = currentStep.expected;
-    if (exp.verb.toLowerCase() === verb.toLowerCase()) {
-      matchedChallenge = true;
-    }
-  }
-
-  return {
-    output,
-    newState: nextState,
-    isCorrect: matchedChallenge,
-    componentFlow: ["Terminal"],
-    actionDescription: `Executed local shell utility '${verb}'.`,
-    actionImpact,
-    openVim,
-  };
 }

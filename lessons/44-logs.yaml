@@ -1,0 +1,72 @@
+id: logs
+chapter: Observability
+title: Reading What the Container Says
+concept: kubectl logs
+
+intro: |
+  Container logs are just stdout and stderr. Kubernetes collects them per Pod,
+  and that is the whole model.
+
+  Generate some traffic, then read what the Pods recorded.
+
+initialState:
+  deployments:
+    - name: web
+      replicas: 2
+      template:
+        image: nginx:1.22
+        labels:
+          app: web
+  services:
+    - name: web
+      selector:
+        app: web
+      port: 80
+
+steps:
+  - type: challenge
+    prompt: Send a request through the Service.
+    hint: curl http://web
+    expected:
+      verb: curl
+      contains: web
+    reveal: Note which Pod answered - that is the one that logged it.
+
+  - type: challenge
+    prompt: Send a couple more, to a different path.
+    hint: curl http://web/products
+    expected:
+      verb: curl
+      contains: /products
+
+  - type: challenge
+    prompt: Read the logs of the Pod that served you.
+    hint: "kubectl logs <paste-the-pod-name-from-the-curl-output>"
+    expected:
+      verb: logs
+    reveal: Startup line plus one access line per request it handled.
+
+  - type: challenge
+    prompt: Check the other Pod's logs and compare.
+    hint: "kubectl logs <paste-the-other-pod-name>"
+    expected:
+      verb: logs
+    reveal: Different requests. Logs are per Pod - never aggregated for you.
+
+  - type: explanation
+    text: |
+      What `kubectl logs` actually does: reads the container's stdout/stderr
+      from that node's disk. Consequences:
+
+      - logs belong to a Pod, and die with it (`--previous` gets you exactly one
+        crash back, and nothing after the Pod is deleted)
+      - a Deployment with 20 replicas gives you 20 separate log streams
+      - your application must log to stdout, not to a file inside the container
+
+      This is why every real cluster runs a log shipper as a DaemonSet: it reads
+      the same files and forwards them somewhere durable and searchable.
+
+  - type: transition
+    text: |
+      Logs are what the app chose to tell you. Sometimes you need to look around
+      inside yourself.

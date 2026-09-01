@@ -17,11 +17,11 @@ spec:
     spec:
       containers:
         - name: k8s-story-lab
-          image: elroymalayov/k8s-lab:belshy-v4
+          image: elroymalayov/k8s-lab:2.0
           imagePullPolicy: Always
           ports:
             - name: http
-              containerPort: 80
+              containerPort: 3000
           readinessProbe:
             httpGet:
               path: /
